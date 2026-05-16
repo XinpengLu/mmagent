@@ -1,0 +1,15 @@
+logs/
+output/
+memory_bank/
+benchmark/
+benchmark_full/
+.env
+.env.local
+xskill_paper_tmp.txt
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
