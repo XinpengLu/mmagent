@@ -1,14 +1,4 @@
-## Overview
-
-Multimodal agents demonstrate impressive problem-solving capabilities but typically operate in isolated episodes without leveraging past experiences. **XSkill** addresses this by combining two complementary forms of accumulated knowledge: task-level **Skills** (structured workflows and tool templates) and action-level **Experiences** (context-specific tactical insights), both automatically extracted from agent trajectories without any parametric training.
-
-XSkill operates in two phases. **Phase I (Accumulation)**: after each batch of rollouts, the agent distills structured skill documents and experience entries via visually-grounded trajectory summarization, cross-rollout critique, and hierarchical consolidation. **Phase II (Inference)**: for each test sample, the system decomposes the task, retrieves relevant knowledge from the memory bank, adapts it to the current visual context, and injects it into the system prompt.
-
-Evaluated on diverse benchmarks (VisualToolBench, TIR-Bench, MMSearch-Plus, AgentVista, MMBrowseComp), XSkill achieves considerable performance gains over strong baselines across different backbone models, with superior zero-shot cross-task transferability.
-
----
-
-## Repository Structure
+## 代码结构
 
 ```
 XSkill/
@@ -43,7 +33,7 @@ XSkill/
 
 ---
 
-## Installation
+## 安装
 
 **Python 3.11** is recommended.
 
@@ -56,47 +46,22 @@ pip install -r requirements.txt
 
 ---
 
-## Configuration
-
-Before running, you must fill in **two** configuration files.
-
-### 1. `eval/run_api_exskill.sh` — API Keys and Model Endpoints
-
-Open `eval/run_api_exskill.sh` and set the following variables:
+## 模型推理配置 .env
+ 
+目前所有的api key写在.env中，运行代码前补充这些key后，运行：source ../.env.
 
 ```bash
-# ── Reasoning Model (the main agent) ──────────────────────────────────────
-export REASONING_MODEL_NAME=""
-export REASONING_API_KEY=$API_KEY_1
-export REASONING_END_POINT=""       # OpenAI-compatible endpoint URL
+export OPENAI_API_KEY=""    # 模型api key
+export OPENAI_BASE_URL=""   # openai 兼容的地址
+export REASONING_MODEL_NAME="o4-mini"  # 推理模型（主agent推理、工具调用决策、最终答案生成）
+export VERIFIER_MODEL_NAME="gpt-4o"    # LLM as Judge 验证模型
+export EXPERIENCE_MODEL_NAME="gpt-4o"  # 经验和skill生成模型（任务分解、经验重写、轨迹总结、经验生成、skill生成合并优化适应）
+export EXPERIENCE_EMBEDDING_MODEL="text-embedding-3-small"  # 嵌入模型
+export SERPAPI_KEY=""    # web_search和image_search tool
+export JINA_API_KEY=""   # visit tool
+``` 
 
-# Optional: second API key for round-robin fallback
-export REASONING_API_KEY_2=$API_KEY_2
-export REASONING_END_POINT_2=""
-
-# ── Verifier Model (LLM-as-judge for scoring) ─────────────────────────────
-export VERIFIER_MODEL_NAME=""
-export VERIFIER_API_KEY=$API_KEY_2
-export VERIFIER_END_POINT=""
-
-# ── Experience Model (experience generation & skill building) ──────────────
-export EXPERIENCE_MODEL_NAME=""
-export EXPERIENCE_API_KEY=$API_KEY_2
-export EXPERIENCE_END_POINT=""
-
-# Embedding model for experience retrieval (OpenAI-compatible)
-export EXPERIENCE_EMBEDDING_MODEL="text-embedding-3-small"
-export EXPERIENCE_EMBEDDING_API_KEY=$API_KEY_2
-export EXPERIENCE_EMBEDDING_ENDPOINT=""
-
-# ── External Tool API Keys ─────────────────────────────────────────────────
-export SERPAPI_KEY=""               # Required for web_search and image_search tool
-export JINA_API_KEY=""              # Required for visit tool
-```
-
-> All models must expose an **OpenAI-compatible chat completion API**. The embedding endpoint must support the `/v1/embeddings` interface.
-
-### 2. `eval/configs/tool_configs.yaml` — Per-Tool Runtime Settings
+## `eval/configs/tool_configs.yaml` 工具使用配置
 
 ```yaml
 # visit tool — webpage content fetching
@@ -115,19 +80,14 @@ image_search:
   search_image_quality: 85
 ```
 
----
-
-## Data Format and Preparation
-
-### Input Data Format
-
-The benchmark data file (passed via `--input-file`) must be a **JSON file containing a list of sample objects**. Each sample supports the following fields:
+## 数据处理
+Benchmark 数据文件（通过 `--input-file` 参数传递）是包含样本对象列表的 JSON 文件。每个样本都具有以下字段：
 
 ```json
 [
   {
-    "doc_id": "sample_001",
-    "problem": "What is shown in <image>? Describe the object in detail.",
+    "doc_id或question_id": "sample_001",
+    "problem或question": "What is shown in <image>? Describe the object in detail.",
     "images": ["relative/path/to/image.jpg"],
     "solution": "A red bicycle parked against a wall."
   },
@@ -135,35 +95,17 @@ The benchmark data file (passed via `--input-file`) must be a **JSON file contai
 ]
 ```
 
-| Field | Required | Description |
-|---|---|---|
-| `doc_id` or `question_id` | Required | Unique identifier for the sample |
-| `problem` or `question` | Required | Question text. Use `<image>` as a placeholder to indicate where each image appears in the question |
-| `images` | Optional | List of image file paths **relative to `--image-folder`**. The number of paths should match the number of `<image>` placeholders |
-| `solution` | Optional | Ground truth answer string, used by the LLM-as-judge verifier for scoring |
-
-**Notes:**
-- If `<image>` placeholders are present in `problem`, images are injected in order of appearance.
-- If no `<image>` placeholder is present but `images` is non-empty, all listed images are passed to the model.
-- Text-only samples (no `images` field and no `<image>` placeholder) are also supported.
-- The `solution` field can be omitted; samples without a ground truth will receive a score of `0.0`.
-
-### Image Files
-
-All image paths in the `images` field are resolved relative to `--image-folder`. For example:
-
-```
---image-folder /data/benchmark
-```
-
-with `"images": ["VisualProbe/val/img_001.jpg"]` will load `/data/benchmark/VisualProbe/val/img_001.jpg`.
-
+说明：
+- 如果 `problem` 中存在 `<image>` 占位符，则会按照出现的顺序插入图片。
+- 如果没有 `<image>` 占位符但 `images` 字段不为空，则会将列出的所有图片传递给模型。
+- 仅包含文本内容的样本（没有 `images` 字段且没有 `<image>` 占位符）也是被支持的。
+- `solution` 字段可以省略；没有基准答案的样本将获得分数 `0.0`。
 
 ---
 
-## Local Layout
+## 说明
 
-This fork keeps code and lightweight documents in `mmagent/`, while large local data and generated artifacts stay outside the Git repo:
+这个分支将代码和简短的文档存放在“mmagent/”目录中，而大型本地数据和生成的文件则存放在 Git 仓库之外：
 
 ```text
 XSkill/
@@ -180,41 +122,18 @@ XSkill/
 └── .env.local        # optional local API keys, not tracked
 ```
 
-All run scripts resolve the data root through `DATA_ROOT` or `XSKILL_DATA_ROOT`. By default, the data root is the parent directory of `mmagent/`.
-For full benchmark scripts, memory is separated by benchmark by default, e.g. `memory_bank/TIR-Bench/experiences.json` and `memory_bank/TIR-Bench/SKILL.md`. Override `MEMORY_ROOT` only when you intentionally want to reuse or transfer one memory bank.
+所有运行脚本都会通过“DATA_ROOT”或“XSKILL_DATA_ROOT”来解析数据根目录。默认情况下，数据根目录是“mmagent/”的父目录。
+
+对于完整的benchmark 测试脚本，默认情况下memory是按benchmark进行划分的，例如“memory_bank/TIR-Bench/experiences.json”和“memory_bank/TIR-Bench/SKILL.md”。只有在您有意要重复使用或转移一个内存库时，才需要重写“MEMORY_ROOT”。
 
 ```bash
 cd /mnt/f/XSkill/mmagent
 
-# Optional override if data is stored elsewhere:
+# 若数据存储于其他位置，则可选择进行手动覆盖：
 export DATA_ROOT=/mnt/f/XSkill
 # or:
 export XSKILL_DATA_ROOT=/mnt/f/XSkill
 ```
-
----
-
-## Running
-
-### 1. XSkill Accumulation (Phase I)
-
-To autonomously accumulate structured experiences and skills from agent trajectories, run:
-
-```bash
-bash eval/run_exskill_train.sh
-```
-
-This script enables online experience generation and skill library updates.
-
-### 2. Inference with XSkill (Phase II)
-
-To evaluate the agent using the accumulated memory bank, run:
-
-```bash
-bash eval/run_exskill_inference.sh
-```
-
-路径也已经同步改过，不再写死到代码目录下。现在默认逻辑是：
 
 代码根目录: F:\XSkill\mmagent
 数据根目录: F:\XSkill
@@ -227,6 +146,7 @@ bash eval/run_exskill_inference.sh
 读取外层: F:\XSkill\.env / .env.local
 同时也支持你手动改路径，不写死：
 
+```bash
 export DATA_ROOT=/mnt/f/XSkill 或
 export XSKILL_DATA_ROOT=/mnt/f/XSkill
 
@@ -234,38 +154,130 @@ export BENCH_ROOT=/some/path/processed
 export OUTPUT_ROOT=/some/path/output
 export LOG_ROOT=/some/path/logs
 export MEMORY_ROOT=/some/path/memory_bank/test
+```
 以后运行要进入 mmagent：
 
+```bash
 cd /mnt/f/XSkill/mmagent
 source ../.env
 bash scripts/run_full_benchmark_test.sh
-或者训练+测试：
+```
+或者 **训练 + 测试**：
 
+```bash
 cd /mnt/f/XSkill/mmagent
 source ../.env
 bash scripts/run_full_benchmark_train_test.sh
+```
 
+测试单独的benchmark:
+```bash
 BENCHMARK=TIR-Bench bash scripts/run_full_benchmark_train_test.sh
-会使用：
+```
+会使用：/mnt/f/XSkill/memory_bank/TIR-Bench/
 
-/mnt/f/XSkill/memory_bank/TIR-Bench/
 换成：
-
+```bash
 BENCHMARK=AgentVista bash scripts/run_full_benchmark_train_test.sh
-会使用：
+```
+会使用：/mnt/f/XSkill/memory_bank/AgentVista/
 
-/mnt/f/XSkill/memory_bank/AgentVista/
-如果你要做论文里的 OOD / transfer，比如用 MMSearch-Plus 的 memory 测 MMBrowseComp，可以显式覆盖：
-
+如果做论文里的 OOD / transfer，比如用 MMSearch-Plus 的 memory 测 MMBrowseComp，可以显式覆盖：
+```bash
 BENCHMARK=MMBrowseComp \
 MEMORY_ROOT=/mnt/f/XSkill/memory_bank/MMSearch-Plus \
 bash scripts/run_full_benchmark_test.sh
+```
 
-cd /mnt/f/XSkill/mmagent
-git add .
-git commit -m "Initialize mmagent codebase"
-git push -u origin main
-如果远端默认分支不是 main，先看一下：
 
-git branch
-再按实际分支名 push。
+## 数据流
+```bash
+benchmark JSON + image
+   ↓
+agent 推理
+   ↓
+样本目录:
+   original_image.jpg 原始图片
+   traj.jsonl 轨迹数据，里面包括：初始题目和 ground truth、每轮 assistant 输出、工具调用、工具参数、工具返回结果、最终回答
+   metrics.json 指标
+   injected_system_prompt.txt 注入系统提示词，会包含：base agent 指令、检索到的 experience、适配后的 skill
+   ↓
+trajectory_summary.py 总结轨迹:
+   扫描图片
+   生成 caption
+   把 <image> / tool image 引用替换成 caption
+   把 traj.jsonl + tool result + caption 拼成 exp_summary_prompt.txt
+   ↓
+LLM 总结轨迹:
+   exp_summary_resp.txt
+   ↓
+experience_critique.py 生成经验操作 (题目+ground truth+rollout摘要+本题检索使用的旧经验):
+   exp_intra_prompt.txt
+   exp_intra_resp.txt
+   exp_items.json
+   ↓
+experience_manager.py 合并进experiences.json:
+   add: 新增经验、计算新经验embedding、计算相似度查找旧经验
+        相似LLM合并新旧经验，不相似加入experiences.json，相似度阈值SIMILARITY_THRESHOLD 0.7
+   modify: 修改已有经验候选、修改对应旧经验
+   重新编号E0/E1/E2...
+   更新 memory_bank/test/experiences.json
+   更新 ExperienceRetriever embedding缓存
+   ↓
+skill_builder.py:
+   skill_raw.md
+   更新 memory_bank/test/SKILL.md
+   ↓
+snapshots/batch_000:
+   保存该 batch 后的 memory 副本
+```
+
+如果经验库比较大，还会做全局 refine：
+```bash
+refine_experience_library:
+    把整个经验库给 LLM
+      ↓
+    让 LLM 判断哪些可以 merge / delete
+      ↓
+    应用 merge/delete
+      ↓
+    重新编号
+```
+
+## 训练测试数据集划分
+论文主实验不是把 4 个 benchmark 的 train 全部混在一起训一个统一 memory 后再测，而是 每个 benchmark 分别积累自己的 skill/experience，再在该 benchmark 的 test split 上测试。
+
+
+下载好benchmark数据后运行scripts/prepare_xskill_benchmarks.py脚本，按照论文中的数据划分标准进行划分和预处理：
+
+工具使用：Code是执行代码、Search-W是搜索网页（输入query）获取内容、Search-I是输入文字或图片搜索获取内容、visit是访问网页（输入URL）提取文本内容。
+
+(1) 视觉智能体工具使用:
+- VisualToolBench: Code、Search-W、visit
+- TIR-Bench: Code
+
+(2) 多模态搜索：
+- MMSearch-Plus: Code、Search-W、Search-I、visit
+- MMBrowseComp: Code、Search-W、Search-I、visit
+
+(3) 综合：
+- AgentVista: Code、Search-W、Search-I、visit
+
+## 关键参数理解
+- BENCHMARK：测试benchmark的名称
+- MAX_SAMPLES_TEST：
+- NUM_WORKERS：并行跑的worker数量
+- ROLLOUTS_PER_SAMPLE：每个样本生成的rollout数量（4），这是为了计算 average@4 和pass@4；如果设成 2，就只能得到 average@2/pass@2。测试结果会写到：
+```bash
+output/full_benchmark/TIR-Bench/test/metrics_at_k.json
+output/full_benchmark/TIR-Bench/test/average_pass_at_k.json
+```
+- EXPERIENCE_LARGE_BATCH：累计多少个 rollout 后做一次经验/技能更新
+- 
+
+## 存在的问题
+1. 问题：检索到的经验是选topk吗，如果检索到的经验相似度很低呢？
+  * 流程是：当前 query --> 生成 query embedding --> 和所有 experience embedding 算 cosine similarity --> 过滤掉 similarity < min_similarity 的经验 --> 按 similarity 降序排序 --> 取前 top_k 条。目前top_k=3，如果开了--experience-retrieval-decomposition，会执行子任务分解，每个任务检索top-k。如果相似度很低怎么办？关键在这个参数：--experience-retrieval-min-similarity，代码默认是：default=0.0，也就是说：只要 cosine similarity >= 0.0，就可能被选中，所以当前默认逻辑下，即使 top-k 的相似度很低，只要它大于等于 0，也会被检索出来。这就是你之前指出的问题：相似不代表有用，低相似度经验也可能误导推理。
+
+  当前代码的实际问题：当前 tt_decomposition_info.txt 里只记录了检索到的 experience ID，但没有把相似度分数完整写出来。所以你不太容易从输出文件判断：E3 是 0.82 检索到的，还是 0.05 检索到的。如果你想分析检索质量，建议后面把 similarity score 也写进 retrieval_info。当前代码里只在 debug logger 里有类似信息，不一定会落盘。
+

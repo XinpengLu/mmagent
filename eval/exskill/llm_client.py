@@ -21,6 +21,12 @@ API_TIMEOUT_IMAGE = 300  # Timeout for multimodal API requests (seconds)
 MAX_TOKENS_DEFAULT = 12288  # Default max tokens for LLM calls
 
 
+def _is_openai_reasoning_model(model_name: str) -> bool:
+    """Return True for OpenAI o-series / GPT-5 reasoning models."""
+    model_id = (model_name or "").lower().split("/")[-1]
+    return model_id.startswith(("o1", "o3", "o4", "gpt-5"))
+
+
 class ExperienceLLM:
     """Lightweight LLM adapter for experience generation via API."""
 
@@ -89,10 +95,16 @@ class ExperienceLLM:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
             ],
-            "temperature": temperature,
-            "top_p": top_p,
-            "max_tokens": max_tokens,
         }
+
+        if _is_openai_reasoning_model(self.model_name):
+            # o-series/GPT-5 reasoning models use max_completion_tokens and may
+            # reject custom sampling params.
+            payload["max_completion_tokens"] = max_tokens
+        else:
+            payload["temperature"] = temperature
+            payload["top_p"] = top_p
+            payload["max_tokens"] = max_tokens
         
         # 固定间隔重试；这里没有指数增长，只是简单等待。
         base_wait_time = 1  # Base wait time in seconds for exponential backoff

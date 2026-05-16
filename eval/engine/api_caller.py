@@ -22,20 +22,32 @@ DEFAULT_MAX_RETRIES = 2  # Default maximum retry count
 
 # ====================== api config functions ======================================
 
+def _is_openai_reasoning_model(model_name: str) -> bool:
+    """Return True for OpenAI o-series / GPT-5 reasoning models."""
+    model_id = (model_name or "").lower().split("/")[-1]
+    return model_id.startswith(("o1", "o3", "o4", "gpt-5"))
+
+
 def _build_payload(model_name: str, messages: list, sampling_params: dict, tools: list = None):
     """
     Build API request payload
-    
+
     Returns:
         dict: Built payload
     """
     payload = {
         "model": model_name,
         "messages": messages,
-        "temperature": sampling_params['temperature'],
-        "top_p": sampling_params['top_p'],
-        "max_tokens": sampling_params['max_tokens'],
     }
+
+    if _is_openai_reasoning_model(model_name):
+        # o-series/GPT-5 reasoning models use max_completion_tokens and usually
+        # reject custom sampling params such as temperature/top_p.
+        payload["max_completion_tokens"] = sampling_params['max_tokens']
+    else:
+        payload["temperature"] = sampling_params['temperature']
+        payload["top_p"] = sampling_params['top_p']
+        payload["max_tokens"] = sampling_params['max_tokens']
     
     # Add tools if provided (for function calling)
     if tools:
@@ -58,7 +70,7 @@ def _add_reasoning_param(payload: dict, model_name: str, end_point: str = None):
     """
     model_lower = model_name.lower()
     is_gemini_model = "gemini" in model_lower
-    is_gpt_model = "gpt-5" in model_lower or "o1" in model_lower or "o3" in model_lower
+    is_gpt_model = _is_openai_reasoning_model(model_name)
     
     # Check if it is OpenRouter API
     is_openrouter = False

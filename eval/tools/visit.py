@@ -19,6 +19,12 @@ JINA_API_KEY = os.environ.get("JINA_API_KEY")
 JINA_AVAILABLE = JINA_API_KEY is not None
 
 
+def _is_openai_reasoning_model(model_name: str) -> bool:
+    """Return True for OpenAI o-series / GPT-5 reasoning models."""
+    model_id = (model_name or "").lower().split("/")[-1]
+    return model_id.startswith(("o1", "o3", "o4", "gpt-5"))
+
+
 @register_tool("visit")
 class Visit(BaseTool):
     name = "visit"
@@ -242,9 +248,12 @@ Please respond in JSON format with the following fields:
                         "content": prompt
                     }
                 ],
-                "temperature": 0.3,
-                "max_tokens": 8192
             }
+            if _is_openai_reasoning_model(self.model_name):
+                payload["max_completion_tokens"] = 8192
+            else:
+                payload["temperature"] = 0.3
+                payload["max_tokens"] = 8192
             
             print(f"[Visit] Calling API to summarize content (model: {self.model_name})...")
             

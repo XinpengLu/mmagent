@@ -3,6 +3,8 @@ LLM-as-Judge evaluator for assessing answer correctness.
 
 This module provides an LLM-based evaluation system that compares predicted
 answers against ground truth using configurable prompts.
+
+benchmark 的正确性判断是 LLM-as-Judge：用 VERIFIER_MODEL_NAME 对模型预测和 ground truth 做语义判定，输出 0/1 分，而不是简单字符串 exact match。
 """
 
 import re
@@ -24,6 +26,12 @@ def _get_client():
     if _client is None:
         _client = LLMJudgeClient()
     return _client
+
+
+def _is_openai_reasoning_model(model_name: str) -> bool:
+    """Return True for OpenAI o-series / GPT-5 reasoning models."""
+    model_id = (model_name or "").lower().split("/")[-1]
+    return model_id.startswith(("o1", "o3", "o4", "gpt-5"))
 
 
 class LLMJudgeClient:
@@ -79,13 +87,18 @@ class LLMJudgeClient:
 
         for attempt in range(max_retries):
             try:
-                response = self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=messages,
-                    temperature=min(0.2 * attempt, 1.0),
-                    max_tokens=8192,
-                    timeout=120,
-                )
+                request_kwargs = {
+                    "model": self.model_name,
+                    "messages": messages,
+                    "timeout": 120,
+                }
+                if _is_openai_reasoning_model(self.model_name):
+                    request_kwargs["max_completion_tokens"] = 8192
+                else:
+                    request_kwargs["temperature"] = min(0.2 * attempt, 1.0)
+                    request_kwargs["max_tokens"] = 8192
+
+                response = self.client.chat.completions.create(**request_kwargs)
 
                 # Validate response structure
                 if not response or not hasattr(response, 'choices') or not response.choices:
@@ -207,18 +220,26 @@ def evaluate_answer(
 ) -> Tuple[float, str]:
     """
     Evaluate a predicted answer against ground truth using LLM-as-judge.
+    使用 LLM 作为评判者来评估预测答案与真实答案的一致性。
     
     Args:
         question: The question text
         prediction_list: List of prediction text segments
         ground_truth: Ground truth answer
         extract_answer: Whether to extract answer from <answer> tags
+        问题：问题文本
+        预测列表：预测文本片段列表
+        真实答案：真实答案
+        提取答案：是否从 <answer> 标签中提取答案
         extra_info: Optional dict with extraction settings
         
     Returns:
         Tuple of (reward, analysis) where:
         - reward: 1.0 for correct, 0.0 for incorrect
         - analysis: Explanation text from the judge
+        元组形式的（奖励，分析），其中：
+        - 奖励：正确时为 1.0，错误时为 0.0
+        - 分析：来自裁判的解释文本
     """
     prediction_text = ' '.join(prediction_list)
     
@@ -287,6 +308,7 @@ def compute_score(
 ) -> Tuple[float, str]:
     """
     Compute accuracy score and return analysis text.
+    计算准确率得分并返回分析文本。
     
     Args:
         prompt: Question text
@@ -296,11 +318,22 @@ def compute_score(
             - gpt_extract_answer: bool, whether to extract from tags
             - extract_answer_tags: str, extraction mode
             - acc_reward_weight: float, weight for accuracy score
+        
+        提示：问题文本
+        预测字符串列表：预测字符串的列表
+        真实答案：真实答案
+        额外信息：可选的包含评估设置的字典：
+            - gpt 提取答案：布尔值，是否从标签中提取
+            - 提取答案标签：字符串，提取模式
+            - 准确性奖励权重：浮点数，准确性得分的权重
     
     Returns:
         Tuple of (accuracy_score, analysis) where:
         - accuracy_score: float, weighted accuracy (0.0 or weight*1.0)
         - analysis: str, evaluation explanation
+        元组形式，包含“准确率”和“分析”两项内容：
+        - 准确率：浮点数，加权准确率（0.0 或权重 * 1.0）
+        - 分析：字符串，评估说明
     """
     extra = extra_info or {}
     extract_answer = extra.get("gpt_extract_answer", False)
