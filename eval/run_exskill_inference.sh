@@ -99,7 +99,9 @@ EXPERIENCE_MAX_ITEMS=120
 
 # 经验检索参数
 EXPERIENCE_RETRIEVAL_TOP_K=3
-MEMORY_ROOT="${MEMORY_ROOT:-$DATA_ROOT/memory_bank/test}"
+MEMORY_NAME="${MEMORY_NAME:-${BENCHMARK:-test}}"
+MEMORY_ROOT="${MEMORY_ROOT:-$DATA_ROOT/memory_bank/$MEMORY_NAME}"
+export MEMORY_NAME MEMORY_ROOT
 EXPERIENCE_LIBRARY="${EXPERIENCE_LIBRARY:-$MEMORY_ROOT/experiences.json}"
 
 # ============================================================================

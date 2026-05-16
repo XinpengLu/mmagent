@@ -172,12 +172,16 @@ XSkill/
 ├── benchmark_full/   # downloaded/processed benchmark data, not tracked
 ├── logs/             # run logs, not tracked
 ├── memory_bank/      # generated experiences and skills, not tracked
+│   ├── TIR-Bench/
+│   ├── VisualToolBench/
+│   └── ...
 ├── output/           # run outputs, not tracked
 ├── .env              # local API keys, not tracked
 └── .env.local        # optional local API keys, not tracked
 ```
 
 All run scripts resolve the data root through `DATA_ROOT` or `XSKILL_DATA_ROOT`. By default, the data root is the parent directory of `mmagent/`.
+For full benchmark scripts, memory is separated by benchmark by default, e.g. `memory_bank/TIR-Bench/experiences.json` and `memory_bank/TIR-Bench/SKILL.md`. Override `MEMORY_ROOT` only when you intentionally want to reuse or transfer one memory bank.
 
 ```bash
 cd /mnt/f/XSkill/mmagent
@@ -223,8 +227,7 @@ bash eval/run_exskill_inference.sh
 读取外层: F:\XSkill\.env / .env.local
 同时也支持你手动改路径，不写死：
 
-export DATA_ROOT=/mnt/f/XSkill
-# 或
+export DATA_ROOT=/mnt/f/XSkill 或
 export XSKILL_DATA_ROOT=/mnt/f/XSkill
 
 export BENCH_ROOT=/some/path/processed
@@ -241,12 +244,22 @@ bash scripts/run_full_benchmark_test.sh
 cd /mnt/f/XSkill/mmagent
 source ../.env
 bash scripts/run_full_benchmark_train_test.sh
-我做了这些校验：
 
-bash -n 所有 shell 脚本通过
-prepare_xskill_benchmarks.py py_compile 通过
-git diff --check 通过
-当前 mmagent 里 Git 状态是新文件待提交，数据目录和结果目录没有进入 Git。你要同步到 GitHub 时执行：
+BENCHMARK=TIR-Bench bash scripts/run_full_benchmark_train_test.sh
+会使用：
+
+/mnt/f/XSkill/memory_bank/TIR-Bench/
+换成：
+
+BENCHMARK=AgentVista bash scripts/run_full_benchmark_train_test.sh
+会使用：
+
+/mnt/f/XSkill/memory_bank/AgentVista/
+如果你要做论文里的 OOD / transfer，比如用 MMSearch-Plus 的 memory 测 MMBrowseComp，可以显式覆盖：
+
+BENCHMARK=MMBrowseComp \
+MEMORY_ROOT=/mnt/f/XSkill/memory_bank/MMSearch-Plus \
+bash scripts/run_full_benchmark_test.sh
 
 cd /mnt/f/XSkill/mmagent
 git add .

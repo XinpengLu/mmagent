@@ -26,8 +26,8 @@ fi
 BENCH_ROOT="${BENCH_ROOT:-$DATA_ROOT/benchmark_full/processed_smoke}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-$DATA_ROOT/output/gpt_processed_smoke}"
 LOG_ROOT="${LOG_ROOT:-$DATA_ROOT/logs/gpt_processed_smoke}"
-MEMORY_ROOT="${MEMORY_ROOT:-$DATA_ROOT/memory_bank/test}"
-export MEMORY_ROOT
+MEMORY_ROOT_OVERRIDE="${MEMORY_ROOT:-}"
+MEMORY_ROOT_BASE="${MEMORY_ROOT_BASE:-$DATA_ROOT/memory_bank}"
 
 MAX_SAMPLES="${MAX_SAMPLES:-1}"
 NUM_WORKERS="${NUM_WORKERS:-1}"
@@ -47,6 +47,7 @@ FAILED=()
 
 for BENCH in "${BENCHMARKS[@]}"; do
     DATA_PATH="$BENCH_ROOT/$BENCH/all.json"
+    BENCH_MEMORY_ROOT="${MEMORY_ROOT_OVERRIDE:-$MEMORY_ROOT_BASE/$BENCH}"
 
     echo
     echo "======================================================================"
@@ -54,7 +55,7 @@ for BENCH in "${BENCHMARKS[@]}"; do
     echo "Data path: $DATA_PATH"
     echo "Image root: $BENCH_ROOT"
     echo "Output: $OUTPUT_ROOT/$BENCH"
-    echo "Memory bank: $MEMORY_ROOT"
+    echo "Memory bank: $BENCH_MEMORY_ROOT"
     echo "======================================================================"
 
     if [[ ! -f "$DATA_PATH" ]]; then
@@ -71,7 +72,8 @@ for BENCH in "${BENCHMARKS[@]}"; do
     NUM_WORKERS="$NUM_WORKERS" \
     ROLLOUTS_PER_SAMPLE="$ROLLOUTS_PER_SAMPLE" \
     DATA_ROOT="$DATA_ROOT" \
-    MEMORY_ROOT="$MEMORY_ROOT" \
+    MEMORY_NAME="$BENCH" \
+    MEMORY_ROOT="$BENCH_MEMORY_ROOT" \
     bash eval/run_exskill_inference.sh
 
     STATUS=$?

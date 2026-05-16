@@ -26,8 +26,8 @@ fi
 BENCH_ROOT="${BENCH_ROOT:-$DATA_ROOT/benchmark_full/processed_smoke}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-$DATA_ROOT/output/gpt_processed_smoke_train}"
 LOG_ROOT="${LOG_ROOT:-$DATA_ROOT/logs/gpt_processed_smoke_train}"
-MEMORY_ROOT="${MEMORY_ROOT:-$DATA_ROOT/memory_bank/test}"
-export MEMORY_ROOT
+MEMORY_ROOT_OVERRIDE="${MEMORY_ROOT:-}"
+MEMORY_ROOT_BASE="${MEMORY_ROOT_BASE:-$DATA_ROOT/memory_bank}"
 
 MAX_SAMPLES="${MAX_SAMPLES:-1}"
 NUM_WORKERS="${NUM_WORKERS:-1}"
@@ -47,12 +47,15 @@ mkdir -p "$OUTPUT_ROOT" "$LOG_ROOT"
 FAILED=()
 
 echo "This script calls eval/run_exskill_train.sh, so it will update:"
-echo "  - $MEMORY_ROOT/experiences.json"
-echo "  - $MEMORY_ROOT/SKILL.md"
+echo "  - one memory directory per benchmark under $MEMORY_ROOT_BASE"
+if [[ -n "$MEMORY_ROOT_OVERRIDE" ]]; then
+    echo "  - override enabled: all benchmarks use $MEMORY_ROOT_OVERRIDE"
+fi
 echo
 
 for BENCH in "${BENCHMARKS[@]}"; do
     DATA_PATH="$BENCH_ROOT/$BENCH/all.json"
+    BENCH_MEMORY_ROOT="${MEMORY_ROOT_OVERRIDE:-$MEMORY_ROOT_BASE/$BENCH}"
 
     echo
     echo "======================================================================"
@@ -61,7 +64,7 @@ for BENCH in "${BENCHMARKS[@]}"; do
     echo "Image root: $BENCH_ROOT"
     echo "Output: $OUTPUT_ROOT/$BENCH"
     echo "MAX_SAMPLES=$MAX_SAMPLES ROLLOUTS_PER_SAMPLE=$ROLLOUTS_PER_SAMPLE"
-    echo "Memory bank: $MEMORY_ROOT"
+    echo "Memory bank: $BENCH_MEMORY_ROOT"
     echo "======================================================================"
 
     if [[ ! -f "$DATA_PATH" ]]; then
@@ -79,7 +82,8 @@ for BENCH in "${BENCHMARKS[@]}"; do
     ROLLOUTS_PER_SAMPLE="$ROLLOUTS_PER_SAMPLE" \
     EXPERIENCE_LARGE_BATCH="$EXPERIENCE_LARGE_BATCH" \
     DATA_ROOT="$DATA_ROOT" \
-    MEMORY_ROOT="$MEMORY_ROOT" \
+    MEMORY_NAME="$BENCH" \
+    MEMORY_ROOT="$BENCH_MEMORY_ROOT" \
     bash eval/run_exskill_train.sh
 
     STATUS=$?
@@ -96,8 +100,8 @@ if [[ ${#FAILED[@]} -eq 0 ]]; then
     echo "Outputs: $OUTPUT_ROOT"
     echo "Logs: $LOG_ROOT"
     echo "Updated memory bank:"
-    echo "  $MEMORY_ROOT/experiences.json"
-    echo "  $MEMORY_ROOT/SKILL.md"
+    echo "  $MEMORY_ROOT_BASE/<benchmark>/experiences.json"
+    echo "  $MEMORY_ROOT_BASE/<benchmark>/SKILL.md"
 else
     echo "Some benchmarks failed: ${FAILED[*]}"
     echo "Check logs under: $LOG_ROOT"
