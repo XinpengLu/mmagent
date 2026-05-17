@@ -23,6 +23,24 @@ from .experience_utils import (
     format_for_prompt,
 )
 
+from .experience_schema import (
+    get_experience_content,
+    normalize_experience_operation,
+    normalize_experience_record,
+)
+
+# 多 skill 管理：聚类生成、测试时选择、经验链接和使用反馈。
+from .multi_skill import (
+    cluster_experiences_to_skills,
+    collect_linked_experiences,
+    format_selected_skills_for_prompt,
+    load_skill_index,
+    rerank_experiences_for_skills,
+    select_skills_for_task,
+    skill_index_path,
+    update_memory_usage_after_sample,
+)
+
 # Skill 生成、合并、测试时适配和压缩。
 from .skill_builder import (
     generate_skill_for_sample,
@@ -46,6 +64,17 @@ __all__ = [
     "save_library",
     "load_experiences",
     "format_for_prompt",
+    "get_experience_content",
+    "normalize_experience_operation",
+    "normalize_experience_record",
+    "cluster_experiences_to_skills",
+    "collect_linked_experiences",
+    "format_selected_skills_for_prompt",
+    "load_skill_index",
+    "rerank_experiences_for_skills",
+    "select_skills_for_task",
+    "skill_index_path",
+    "update_memory_usage_after_sample",
     "generate_skill_for_sample",
     "merge_skills",
     "adapt_skill_for_task",

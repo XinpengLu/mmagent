@@ -34,35 +34,56 @@ INTRA_SAMPLE_CRITIQUE = """You are a reasoning analysis expert. Review these pro
    - For visual operations: What preprocessing helped? What was missing?
 
 2. **Experience Extraction**:
-   Create experiences in two categories:
-   - **Execution Tips**: Practical advice on tool usage - when to use which tool, what parameters work best, how to interpret results effectively.
-   - **Decision Rules**: Simple guidelines for reasoning choices - when to decompose a problem, when to search for information, when to double-check results.
-   
+   Create structured experiences in two outcome categories:
+   - **success**: What worked in correct or partially useful trajectories.
+   - **failure**: What failed in wrong trajectories and how future agents should avoid it.
+
+   The two categories must use the same JSON format. Include failure experiences when a trajectory answered incorrectly, skipped a needed tool, used the wrong tool, misread visual evidence, or applied an experience/skill poorly.
+
    You have two options: [add, modify]
    - **add**: A genuinely new lesson not covered by existing experiences.
    - **modify**: Improve an existing experience (reference its ID) if you find it could be more accurate, clearer, or more actionable based on this trajectory.
-   
+
    The `<experiences_used>` section below shows the experiences that were used to guide this sample. Review them against the trajectory outcomes to identify potential improvements.
-   
+
    You can apply at most {max_ops} updates for this case.
 
 3. **Experience Quality**:
-   - Keep each experience under 64 words.
+   - Keep each `content` under 64 words.
    - Start with the situation or condition when the advice applies.
    - Make it general enough to apply to similar problems.
    - Focus on actionable guidance, not abstract principles.
    - Avoid specific examples - the experience should generalize.
+   - Use short lowercase tags for `task_tags` and `tool_tags`.
+   - Use `visual_tags` for reusable visual states such as "small_pointer", "maze_grid", "low_contrast", "tiny_text".
+   - Use `action_policy` to state the concrete next action/tool policy, e.g. {"tool": "code_interpreter", "when": "path options are long", "do": "simulate each option"}.
+   - Use `confidence` between 0 and 1 to indicate how reliable this lesson is.
+   - Set `failure_mode` to null for success experiences. For failure experiences, use a concise label such as "shortcut_without_tool", "wrong_tool", "bad_crop", "wrong_scale_mapping", "misread_visual_evidence", or "misleading_memory".
 
 Provide detailed reasoning following the above framework, then conclude with:
 ```json
 [
   {{
     "option": "add",
-    "experience": "the new generalizable experience"
+    "kind": "success",
+    "task_tags": ["task_type", "visual_operation"],
+    "tool_tags": ["code_interpreter"],
+    "visual_tags": ["visual_signal"],
+    "failure_mode": null,
+    "confidence": 0.8,
+    "action_policy": {"tool": "code_interpreter", "when": "condition", "do": "specific reusable action"},
+    "content": "the new generalizable success experience"
   }},
   {{
     "option": "modify",
-    "experience": "the modified experience",
+    "kind": "failure",
+    "task_tags": ["task_type"],
+    "tool_tags": [],
+    "visual_tags": ["visual_signal"],
+    "failure_mode": "shortcut_without_tool",
+    "confidence": 0.7,
+    "action_policy": {"tool": "code_interpreter", "when": "direct visual judgment is risky", "do": "verify before final answer"},
+    "content": "the modified failure-prevention experience",
     "modified_from": "E17"
   }},
   ...
@@ -152,4 +173,3 @@ These experiences highlight common patterns and pitfalls. When you encounter mat
 
 Your instruction is following:
 """
-

@@ -48,6 +48,11 @@ TOP_P_DEFAULT = 1.0  # Default top_p parameter
 
 # --------- Prompts ---------
 from prompts.experience_prompts_test_time import TASK_DECOMPOSITION_PROMPT, EXPERIENCE_REWRITE_PROMPT
+from .experience_schema import (
+    format_experience_for_prompt,
+    get_experience_content,
+    normalize_experience_library,
+)
 
 
 def _build_multimodal_user_content(prompt: str, images: List[Any]) -> List[dict]:
@@ -102,7 +107,7 @@ class ExperienceRetriever:
             experience_library_path: Path to experience library JSON file (used to name cache subfolder)
         """
         # 保存经验库和 embedding 服务配置。
-        self.experiences = experiences
+        self.experiences = normalize_experience_library(experiences)
         self.embedding_model = embedding_model
         self.cache_dir = cache_dir
         self.enable_cache = enable_cache
@@ -434,7 +439,7 @@ class ExperienceRetriever:
         print("This may take a while for the first time...")
         
         exp_ids = list(self.experiences.keys())
-        exp_texts = [self.experiences[exp_id] for exp_id in exp_ids]
+        exp_texts = [get_experience_content(self.experiences[exp_id]) for exp_id in exp_ids]
         
         start_time = time.time()
         embeddings = self._generate_embeddings_batch(exp_texts, batch_size=BATCH_SIZE)
@@ -483,7 +488,8 @@ class ExperienceRetriever:
             new_exp_ids = []
             updated_exp_ids = []
             
-            for exp_id, exp_text in new_experiences.items():
+            normalized_new = normalize_experience_library(new_experiences)
+            for exp_id, exp_text in normalized_new.items():
                 if exp_id not in self.experiences:
                     # 新增经验需要新生成 embedding。
                     new_exp_ids.append(exp_id)
@@ -492,19 +498,19 @@ class ExperienceRetriever:
                     updated_exp_ids.append(exp_id)
             
             # 删除经验时同步移除旧向量。
-            deleted_exp_ids = set(self.experiences.keys()) - set(new_experiences.keys())
+            deleted_exp_ids = set(self.experiences.keys()) - set(normalized_new.keys())
             for exp_id in deleted_exp_ids:
                 if exp_id in self._experience_embeddings:
                     del self._experience_embeddings[exp_id]
             
             # 先更新经验文本，再按需生成新向量。
-            self.experiences = dict(new_experiences)
+            self.experiences = dict(normalized_new)
             
             # 只对新增/更新经验调用 embedding API。
             exp_ids_to_embed = new_exp_ids + updated_exp_ids
             if exp_ids_to_embed:
                 print(f"  Updating embeddings for {len(exp_ids_to_embed)} experiences ({len(new_exp_ids)} new, {len(updated_exp_ids)} updated)...")
-                exp_texts = [self.experiences[exp_id] for exp_id in exp_ids_to_embed]
+                exp_texts = [get_experience_content(self.experiences[exp_id]) for exp_id in exp_ids_to_embed]
                 embeddings = self._generate_embeddings_batch(exp_texts, batch_size=BATCH_SIZE)
                 
                 for exp_id, emb in zip(exp_ids_to_embed, embeddings):
@@ -519,7 +525,7 @@ class ExperienceRetriever:
                     print(f"  Updated embeddings cache")
         else:
             # 全量模式：清空所有旧向量并重新生成。
-            self.experiences = dict(new_experiences)
+            self.experiences = normalize_experience_library(new_experiences)
             self._experience_embeddings.clear()
             self._load_or_generate_embeddings()
         
@@ -871,7 +877,7 @@ def rewrite_experiences_for_task(
         # 将经验整理成 [exp_id] + 文本块，便于 LLM 按 ID 返回。
         exp_items = []
         for exp_id, exp_text in experiences.items():
-            exp_items.append(f"[{exp_id}]\n{exp_text}")
+            exp_items.append(f"[{exp_id}]\n{format_experience_for_prompt(exp_id, exp_text)}")
         experiences_text = "\n\n".join(exp_items)
         
         # prompt 要求 LLM 根据当前任务改写或跳过不相关经验。

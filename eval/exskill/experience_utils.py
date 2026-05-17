@@ -4,8 +4,14 @@ import os
 import json
 import base64
 import io
-from typing import Dict
+from typing import Any, Dict
 from PIL import Image
+
+from .experience_schema import (
+    ExperienceLibrary,
+    format_experience_for_prompt,
+    normalize_experience_library,
+)
 
 
 def image_to_base64(image: Image.Image) -> str:
@@ -25,7 +31,7 @@ def image_to_base64(image: Image.Image) -> str:
 
 # --------- Experience Library I/O ---------
 
-def load_existing(path: str) -> Dict[str, str]:
+def load_existing(path: str) -> ExperienceLibrary:
     """Load existing experiences from a JSON file.
     
     Args:
@@ -37,28 +43,26 @@ def load_existing(path: str) -> Dict[str, str]:
     try:
         # 兼容两种格式：{"experiences": {...}} 或直接 {id: text}。
         data = json.load(open(path, "r", encoding="utf-8"))
-        if isinstance(data, dict) and "experiences" in data:
-            return data["experiences"]
-        if isinstance(data, dict):
-            return data
+        return normalize_experience_library(data)
     except Exception:
         pass
     return {}
 
 
-def save_library(path: str, experiences: Dict[str, str]):
+def save_library(path: str, experiences: Dict[str, Any]):
     """Save experiences to a JSON file.
     
     Args:
         path: Path to save the JSON file
         experiences: Dictionary mapping experience IDs to experience text
     """
-    # 统一保存为带 experiences 外层字段的格式。
+    # 统一保存为带 experiences 外层字段的结构化格式。
+    normalized = normalize_experience_library(experiences)
     with open(path, "w", encoding="utf-8") as f:
-        json.dump({"experiences": experiences}, f, ensure_ascii=False, indent=2)
+        json.dump({"schema_version": 2, "experiences": normalized}, f, ensure_ascii=False, indent=2)
 
 
-def load_experiences(path: str) -> Dict[str, str]:
+def load_experiences(path: str) -> ExperienceLibrary:
     """Load experiences from a JSON file.
     从 JSON 文件中加载经验数据
     
@@ -73,16 +77,13 @@ def load_experiences(path: str) -> Dict[str, str]:
         try:
             # 与 load_existing 保持一致，兼容旧经验库文件。
             data = json.load(open(path, "r", encoding="utf-8"))
-            if isinstance(data, dict) and "experiences" in data:
-                return data["experiences"]
-            if isinstance(data, dict):
-                return data
+            return normalize_experience_library(data)
         except Exception:
             pass
     return {}
 
 
-def format_for_prompt(experiences: Dict[str, str], max_items: int = 32) -> str:
+def format_for_prompt(experiences: Dict[str, Any], max_items: int = 32) -> str:
     """Format experiences for injection into prompts.
     将经验格式化注入提示中
 
@@ -100,6 +101,6 @@ def format_for_prompt(experiences: Dict[str, str], max_items: int = 32) -> str:
         return ""
     # 只取前 max_items 条，避免 system prompt 过长。
     items = list(experiences.items())[:max_items]
-    bullets = "\n".join([f"- [{k}] {v}" for k, v in items])
+    bullets = "\n".join([f"- [{k}] {format_experience_for_prompt(k, v)}" for k, v in items])
     return INJECTION_HEADER.format(bullets=bullets)
 

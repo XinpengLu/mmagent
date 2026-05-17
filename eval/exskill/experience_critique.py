@@ -10,6 +10,7 @@ from prompts.experience_prompts import (
 )
 
 from .llm_client import ExperienceLLM
+from .experience_schema import format_experience_for_prompt
 
 
 # --------- Constants ---------
@@ -62,7 +63,7 @@ def intra_sample_experiences(question: str, groundtruth: str, summaries: Dict[st
     if used_experiences:
         exp_lines = []
         for exp_id, exp_content in used_experiences.items():
-            exp_lines.append(f"[{exp_id}] {exp_content}")
+            exp_lines.append(f"[{exp_id}] {format_experience_for_prompt(exp_id, exp_content)}")
         formatted_experiences = "\n\n".join(exp_lines)
     
     # prompt 要求输出 add/modify 等经验库操作。

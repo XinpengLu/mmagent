@@ -60,6 +60,66 @@ version: 1.0.0
 Output ONLY the SKILL.md content starting with `---`."""
 
 
+GENERATE_CLUSTER_SKILL_PROMPT = """You are a skilled AI agent architect. Build one reusable skill from a cluster of structured experiences and supporting rollouts.
+
+The skill should be selected later by task/tool tags, so make it modular and specific to this cluster rather than a global manual.
+
+### Cluster Metadata:
+- Skill ID: {skill_id}
+- Task tags: {task_tags}
+- Tool tags: {tool_tags}
+- Visual tags: {visual_tags}
+- Failure modes: {failure_modes}
+- Linked experience IDs: {experience_ids}
+
+### Design Rules:
+1. Use the experiences as distilled evidence, but inspect the rollout excerpts for reusable tool/code patterns.
+2. Capture executable knowledge: code templates, validation checks, tool sequencing, and when to stop.
+3. Include both success patterns and failure-prevention rules.
+4. Keep the skill concise: target 400-700 words.
+5. Use placeholders instead of task-specific answers.
+
+### Output Structure:
+```
+---
+name: {skill_id}
+description: |
+  [When this skill should be used.]
+version: 1.0.0
+task_tags: [...]
+tool_tags: [...]
+visual_tags: [...]
+linked_experience_ids: [...]
+---
+
+# [Skill Title]
+
+## When to Use
+- ...
+
+## Workflow
+1. ...
+
+## Tool Templates
+```python
+# reusable template if applicable
+```
+
+## Failure Checks
+- ...
+```
+
+<experiences>
+{experiences}
+</experiences>
+
+<rollout_evidence>
+{rollout_evidence}
+</rollout_evidence>
+
+Output ONLY the SKILL.md content starting with `---`."""
+
+
 MERGE_SKILL_PROMPT = """You are a knowledge architect. Your job is to maintain a single, unified skill document that grows wiser with each new case.
 
 ### Philosophy:

@@ -2,13 +2,23 @@ import os
 import json
 import re
 import time
-from typing import Optional, Dict, List, Tuple
+from typing import Any, Optional, Dict, List, Tuple
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
 
 from .llm_client import ExperienceLLM
 from .experience_retriever import ExperienceRetriever
+from .experience_schema import (
+    ExperienceLibrary,
+    format_experience_for_prompt,
+    get_experience_content,
+    get_experience_kind,
+    make_record_for_id,
+    merge_record_metadata,
+    normalize_experience_library,
+    reassign_experience_ids,
+)
 
 from prompts.experience_prompts import EXPERIENCE_REFINE_PROMPT, MERGE_PROMPT
 
@@ -38,7 +48,7 @@ def _strip_markdown_code_blocks(text: str) -> str:
     return (parts[0].strip() if parts else text).strip()
 
 
-def _max_exp_id(exp_dict: Dict[str, str], default: int = 0) -> int:
+def _max_exp_id(exp_dict: Dict[str, Any], default: int = 0) -> int:
     """Return the maximum numeric part of experience IDs (E0, E1, ...)."""
     # 用于分配新的 E{id}，忽略非标准 ID。
     nums = []
@@ -56,25 +66,25 @@ class ExperienceMemoryProvider:
     Wraps ExperienceRetriever for embedding functionality.
     """
     # 对应 Experience Manager：负责相似经验检索、合并、删除和修改。
-    
-    def __init__(self, experiences: Dict[str, str], retriever: Optional[ExperienceRetriever] = None):
+
+    def __init__(self, experiences: Dict[str, Any], retriever: Optional[ExperienceRetriever] = None):
         """
         Initialize the provider with existing experiences.
-        
+
         Args:
             experiences: Dictionary mapping experience IDs to experience text
             retriever: Optional ExperienceRetriever instance (will create one if not provided)
         """
         # provider 是经验库的临时可变视图，便于批量 add/remove/modify。
-        self.experiences = dict(experiences)
+        self.experiences = normalize_experience_library(experiences)
         self._retriever = retriever
-        
+
         # 如果外部没传 retriever，后面按需创建一个临时检索器。
         if self._retriever is None:
             # Create a minimal retriever just for embedding functionality
             # We'll reuse the existing retriever's embedding methods
             pass
-    
+
     def _get_retriever(self) -> ExperienceRetriever:
         """Get or create retriever instance."""
         if self._retriever is None:
@@ -87,12 +97,12 @@ class ExperienceMemoryProvider:
                 enable_cache=False,  # Don't cache for temporary provider
             )
         return self._retriever
-    
+
     def _embed_texts(self, texts: List[str]) -> np.ndarray:
         """Generate embeddings for texts using retriever."""
         if not texts:
             return np.array([], dtype=np.float32)
-        
+
         retriever = self._get_retriever()
         embeddings = retriever._generate_embeddings_batch(texts, batch_size=len(texts))
         # 过滤生成失败的 embedding，再堆成矩阵。
@@ -102,109 +112,112 @@ class ExperienceMemoryProvider:
         if len(valid_embeddings) == 1:
             return valid_embeddings[0].reshape(1, -1)
         return np.vstack(valid_embeddings)
-    
+
     def _search_similar(
-        self, 
-        query_embedding: np.ndarray, 
+        self,
+        query_embedding: np.ndarray,
         top_k: int = TOP_K_SIMILARITY_SEARCH,
         similarity_threshold: float = SIMILARITY_THRESHOLD
-    ) -> List[Tuple[str, str, float]]:
+    ) -> List[Tuple[str, Any, float]]:
         """
         Search for similar experiences.
-        
+
         Args:
             query_embedding: Query embedding vector (1D or 2D array)
             top_k: Maximum number of results
             similarity_threshold: Minimum similarity score
-            
+
         Returns:
-            List of (exp_id, exp_text, similarity_score) tuples
+            List of (exp_id, experience_record, similarity_score) tuples
         """
         if not self.experiences:
             return []
-        
+
         # sklearn cosine_similarity 需要二维矩阵输入。
         if len(query_embedding.shape) == 1:
             query_embedding = query_embedding.reshape(1, -1)
-        
+
         # 对当前经验库整体生成 embedding，用于相似经验搜索。
         exp_ids = list(self.experiences.keys())
-        exp_texts = [self.experiences[exp_id] for exp_id in exp_ids]
-        
+        exp_texts = [get_experience_content(self.experiences[exp_id]) for exp_id in exp_ids]
+
         # 批量生成现有经验向量。
         exp_embeddings = self._embed_texts(exp_texts)
         if exp_embeddings.size == 0:
             return []
-        
+
         # Ensure exp_embeddings is 2D
         if len(exp_embeddings.shape) == 1:
             exp_embeddings = exp_embeddings.reshape(1, -1)
-        
+
         # 计算新经验与已有经验的相似度。
         similarities = cosine_similarity(query_embedding, exp_embeddings)[0]
-        
+
         # 取相似度最高的 top-k 候选。
         top_indices = np.argsort(-similarities)[:top_k]
-        
+
         candidates = []
         for idx in top_indices:
             score = float(similarities[idx])
             if score >= similarity_threshold:
                 exp_id = exp_ids[idx]
-                exp_text = exp_texts[idx]
-                candidates.append((exp_id, exp_text, score))
-        
+                exp_record = self.experiences[exp_id]
+                candidates.append((exp_id, exp_record, score))
+
         # 按相似度降序返回，后续优先合并最接近的经验。
         candidates.sort(key=lambda x: x[2], reverse=True)
         return candidates
-    
-    def add_experience(self, exp_id: str, text: str):
-        """Add a new experience."""
-        self.experiences[exp_id] = text
-    
+
+    def add_experience(self, exp_id: str, record: Any):
+        """Add a new structured experience."""
+        self.experiences[exp_id] = make_record_for_id(exp_id, record)
+
     def remove_experience(self, exp_id: str):
         """Remove an experience."""
         if exp_id in self.experiences:
             del self.experiences[exp_id]
-    
-    def modify_experience(self, exp_id: str, new_text: str):
+
+    def modify_experience(self, exp_id: str, new_record: Any):
         """Modify an existing experience."""
         if exp_id in self.experiences:
-            self.experiences[exp_id] = new_text
-    
-    def to_dict(self) -> Dict[str, str]:
-        """Convert to simple dictionary format."""
+            self.experiences[exp_id] = make_record_for_id(exp_id, new_record)
+
+    def to_dict(self) -> ExperienceLibrary:
+        """Return the structured experience library."""
         return dict(self.experiences)
 
 
 def _llm_merge_experiences(
-    candidates: List[Tuple[str, str, float]], 
+    candidates: List[Tuple[str, Any, float]],
     llm: ExperienceLLM,
     max_retries: int = MAX_RETRIES
 ) -> Optional[str]:
     """
     Use LLM to merge similar experiences directly.
-    
+
     Args:
-        candidates: List of (exp_id, exp_text, similarity_score) tuples
+        candidates: List of (exp_id, experience_record, similarity_score) tuples
         llm: ExperienceLLM instance
         max_retries: Maximum retry attempts
-        
+
     Returns:
         Merged experience text, or None if merge failed
     """
     if len(candidates) < 2:
         return None
-    
+
     # 把候选经验及相似度交给 LLM，让它合并成一条更通用经验。
     exp_list = []
-    for i, (exp_id, exp_text, score) in enumerate(candidates, 1):
-        exp_list.append(f"[{exp_id}] (similarity: {score:.3f})\n{exp_text}")
-    
+    for i, (exp_id, exp_record, score) in enumerate(candidates, 1):
+        exp_list.append(
+            f"[{exp_id}] (similarity: {score:.3f})\n"
+            f"{format_experience_for_prompt(exp_id, exp_record)}"
+        )
+
     experiences_text = "\n\n".join(exp_list)
-    
+
     prompt = MERGE_PROMPT.format(experiences_text=experiences_text)
-    
+
     for attempt in range(max_retries):
         try:
             # 合并结果应是纯经验文本，不需要 JSON。
@@ -219,99 +232,113 @@ def _llm_merge_experiences(
             else:
                 print(f"  - Error: Merge LLM call failed after {max_retries} attempts: {e}")
                 return None
-    
+
     return None
 
 
 def _process_add_with_merge(
     provider: ExperienceMemoryProvider,
-    new_text: str,
+    operation: Dict[str, Any],
     llm: ExperienceLLM,
     similarity_threshold: float = SIMILARITY_THRESHOLD,
     next_id: int = 0
 ) -> Tuple[str, bool]:
     """
     Process add operation with similarity check and merge if needed.
-    
+
     Args:
         provider: ExperienceMemoryProvider instance
-        new_text: New experience text to add
+        operation: Structured add/modify operation containing an experience record
         llm: ExperienceLLM instance
         similarity_threshold: Threshold for triggering merge
         next_id: Next available ID number
-        
+
     Returns:
         Tuple of (final_exp_id, was_merged)
     """
-    # 先给新增经验生成 embedding，用来搜索相似旧经验。
+    # 先把新增经验规范化成结构化记录；embedding 只看 content。
+    exp_id = f"E{next_id}"
+    new_record = make_record_for_id(exp_id, operation)
+    new_text = get_experience_content(new_record)
+    if not new_text:
+        return exp_id, False
+
     new_emb = provider._embed_texts([new_text])
     if new_emb.size == 0:
         # embedding 失败时不做相似合并，直接新增。
-        exp_id = f"E{next_id}"
-        provider.add_experience(exp_id, new_text)
+        provider.add_experience(exp_id, new_record)
         return exp_id, False
-    
+
     # 从矩阵中取出单条新经验向量。
     if len(new_emb.shape) == 2:
         query_emb = new_emb[0]
     else:
         query_emb = new_emb
-    
+
     # 搜索与新经验相似的旧经验。
     candidates = provider._search_similar(query_emb, top_k=TOP_K_SIMILARITY_SEARCH, similarity_threshold=similarity_threshold)
-    
+    # 成功经验和失败经验分开合并，避免丢失 outcome 语义。
+    new_kind = get_experience_kind(new_record)
+    candidates = [
+        (cand_id, cand_record, score)
+        for cand_id, cand_record, score in candidates
+        if get_experience_kind(cand_record) == new_kind
+    ]
+
     if not candidates:
         # 没有足够相似的经验，直接加入经验库。
-        exp_id = f"E{next_id}"
-        provider.add_experience(exp_id, new_text)
+        provider.add_experience(exp_id, new_record)
         return exp_id, False
-    
+
     # 找到相似经验时，将新经验和旧经验合并为一条。
     print(f"  - Found {len(candidates)} similar experiences (threshold: {similarity_threshold:.2f}), merging...")
-    
+
     # NEW 是本轮待加入的新经验。
-    all_candidates = [("NEW", new_text, 1.0)] + candidates
-    
-    # 由 LLM 生成合并后的通用经验。
+    all_candidates = [("NEW", new_record, 1.0)] + candidates
+
+    # 由 LLM 生成合并后的通用经验正文，结构化元数据由代码保留。
     merged_text = _llm_merge_experiences(all_candidates, llm)
-    
+
     if merged_text:
         # 删除被合并的旧经验。
-        for exp_id, _, _ in candidates:
-            provider.remove_experience(exp_id)
-        
-        # 用新的 ID 写入合并后的经验。
+        for cand_id, _, _ in candidates:
+            provider.remove_experience(cand_id)
+
+        # 用新的 ID 写入合并后的结构化经验。
         exp_id = f"E{next_id}"
-        provider.add_experience(exp_id, merged_text)
+        provider.add_experience(
+            exp_id,
+            merge_record_metadata(exp_id, [record for _, record, _ in all_candidates], merged_text),
+        )
         print(f"    - Merged {len(all_candidates)} experiences into {exp_id}")
         return exp_id, True
     else:
         # 合并失败时退回直接新增，避免丢经验。
         print(f"    - Warning: Merge failed, adding new experience separately")
         exp_id = f"E{next_id}"
-        provider.add_experience(exp_id, new_text)
+        provider.add_experience(exp_id, new_record)
         return exp_id, False
 
 
 def batch_merge(
-    existing: Dict[str, str], 
-    updates: List[dict], 
-    llm: ExperienceLLM, 
-    max_retries: int = MAX_RETRIES, 
-    debug_dir: Optional[str] = None, 
+    existing: Dict[str, Any],
+    updates: List[dict],
+    llm: ExperienceLLM,
+    max_retries: int = MAX_RETRIES,
+    debug_dir: Optional[str] = None,
     experience_limit: Optional[int] = None,
     similarity_threshold: float = SIMILARITY_THRESHOLD,
     retriever: Optional[ExperienceRetriever] = None
-) -> Dict[str, str]:
+) -> ExperienceLibrary:
     """
     Merge new experience updates into existing library with intelligent similarity-based merging.
-    
+
     Flow:
-    - add operations: Check similarity → if high, directly merge with similar experiences
+    - add operations: Check similarity -> if high, directly merge with similar experiences
     - modify operations: Directly modify, no similarity check
-    
+
     Args:
-        existing: Current experience library {id: text}
+        existing: Current experience library {id: record or text}
         updates: List of update operations from intra_sample_experiences
         llm: ExperienceLLM instance for calling LLM
         max_retries: Number of retry attempts for LLM call
@@ -319,11 +346,12 @@ def batch_merge(
         experience_limit: Optional limit on experience count
         similarity_threshold: Threshold for triggering merge
         retriever: Optional ExperienceRetriever instance for embedding (will create if needed)
-    
+
     Returns:
-        Updated experience library
+        Updated structured experience library
     """
     # 对应 Phase I / Knowledge Consolidation：按相似度合并经验库。
+    existing = normalize_experience_library(existing)
     if not updates:
         # 没有新操作但超过容量上限时，仍尝试压缩旧经验库。
         if isinstance(experience_limit, int) and experience_limit > 0 and len(existing) > experience_limit:
@@ -334,23 +362,25 @@ def batch_merge(
             except Exception as e:
                 print(f"  - Warning: failed to reduce existing library to limit {experience_limit}: {e}")
         return existing
-    
+
     # Step 1: 创建经验库可变视图。
     provider = ExperienceMemoryProvider(existing, retriever=retriever)
-    max_id = _max_exp_id(existing)
+    max_id = _max_exp_id(provider.experiences)
 
     # Step 2: add 会先查相似经验；modify 延后直接应用。
     to_modify = []
     add_count = 0
     merge_count = 0
-    
+
     for operation in updates:
+        if not isinstance(operation, dict):
+            continue
         option = operation.get("option", "add")
-        experience = operation.get("experience", "").strip()
-        
+        experience = get_experience_content(operation.get("experience", operation)).strip()
+
         if not experience:
             continue
-        
+
         if option == "modify":
             # modify 指定已有 ID 时直接修改，不做相似度合并。
             modified_from = operation.get("modified_from")
@@ -359,38 +389,36 @@ def batch_merge(
             else:
                 # 被修改的 ID 不存在时退化为 add。
                 max_id += 1
-                exp_id, was_merged = _process_add_with_merge(provider, experience, llm, similarity_threshold, max_id)
+                exp_id, was_merged = _process_add_with_merge(provider, operation, llm, similarity_threshold, max_id)
                 add_count += 1
                 if was_merged:
                     merge_count += 1
         elif option == "add":
             # add 先做相似度检查，再决定新增或合并。
             max_id += 1
-            exp_id, was_merged = _process_add_with_merge(provider, experience, llm, similarity_threshold, max_id)
+            exp_id, was_merged = _process_add_with_merge(provider, operation, llm, similarity_threshold, max_id)
             add_count += 1
             if was_merged:
                 merge_count += 1
-    
-    print(f"  - Batch update: {len(updates)} updates → {len(to_modify)} modifies, {add_count} adds ({merge_count} merged)")
-    
+
+    print(f"  - Batch update: {len(updates)} updates -> {len(to_modify)} modifies, {add_count} adds ({merge_count} merged)")
+
     # Step 3: 应用所有 modify 操作。
     for operation in to_modify:
         modified_from = operation.get("modified_from")
-        new_text = operation.get("experience", "").strip()
-        if modified_from and new_text:
-            provider.modify_experience(modified_from, new_text)
+        new_record = make_record_for_id(modified_from, operation) if modified_from else None
+        if modified_from and new_record and get_experience_content(new_record):
+            provider.modify_experience(modified_from, new_record)
             print(f"    - Modified {modified_from}")
-    
+
     # Step 4: 取出最终经验库并重新编号。
     final_experiences_dict = provider.to_dict()
-    
+
     # 重新编号为连续的 E0, E1, ...，避免删除/合并后 ID 空洞。
-    final_experiences = {}
-    for idx, (old_id, text) in enumerate(sorted(final_experiences_dict.items())):
-        final_experiences[f"E{idx}"] = text
-    
+    final_experiences = reassign_experience_ids(final_experiences_dict)
+
     print(f"  - Final library size: {len(final_experiences)} experiences")
-    
+
     # 如果仍超过容量上限，继续做强制压缩。
     if isinstance(experience_limit, int) and experience_limit > 0 and len(final_experiences) > experience_limit:
         print(f"  - Current library size ({len(final_experiences)}) exceeds limit ({experience_limit}), attempting to merge...")
@@ -403,55 +431,55 @@ def batch_merge(
                 print(f"  - Warning: reduction failed, library size unchanged: {len(final_experiences)} (limit {experience_limit})")
         except Exception as e:
             print(f"  - Warning: failed to reduce experiences to limit {experience_limit}: {e}")
-    
+
     return final_experiences
 
 
 def _reduce_experiences_to_limit(
-    experiences: Dict[str, str], 
-    limit: int, 
-    llm: ExperienceLLM, 
-    debug_dir: Optional[str] = None, 
+    experiences: Dict[str, Any],
+    limit: int,
+    llm: ExperienceLLM,
+    debug_dir: Optional[str] = None,
     max_rounds: int = 3,
     similarity_threshold: float = SIMILARITY_THRESHOLD_REDUCTION,
     retriever: Optional[ExperienceRetriever] = None
-) -> Dict[str, str]:
+) -> ExperienceLibrary:
     """
     Iteratively reduce experience count to <= limit using similarity-based forced merging.
-    
+
     Process:
     1. Find most similar experience pairs using embedding similarity
     2. Force merge pairs starting from highest similarity
     3. Repeat until limit is reached or max_rounds exceeded
     """
-    current = dict(experiences)
+    current = normalize_experience_library(experiences)
     round_idx = 0
     print(f"    - Starting reduction: {len(current)} experiences, target <= {limit}")
-    
+
     # 用 provider 做相似度搜索和临时经验库更新。
     provider = ExperienceMemoryProvider(current, retriever=retriever)
-    
+
     while len(current) > limit and round_idx < max_rounds:
         round_idx += 1
         print(f"    - Round {round_idx}: Current count: {len(current)}, target: {limit}")
-        
+
         try:
             # Step 1: 找到经验库中最相似的经验对。
             exp_ids = list(current.keys())
             if len(exp_ids) < 2:
                 break
-            
-            # 对当前所有经验批量生成向量。
-            exp_texts = [current[exp_id] for exp_id in exp_ids]
+
+            # 对当前所有经验的 content 批量生成向量。
+            exp_texts = [get_experience_content(current[exp_id]) for exp_id in exp_ids]
             exp_embeddings = provider._embed_texts(exp_texts)
-            
+
             if exp_embeddings.size == 0:
                 print(f"    - Round {round_idx}: Failed to generate embeddings, stopping")
                 break
-            
+
             # 计算经验两两之间的相似度矩阵。
             similarities = cosine_similarity(exp_embeddings)
-            
+
             # 只保留超过压缩阈值的经验对。
             similar_pairs = []
             for i in range(len(exp_ids)):
@@ -459,46 +487,52 @@ def _reduce_experiences_to_limit(
                     sim_score = float(similarities[i][j])
                     if sim_score >= similarity_threshold:
                         similar_pairs.append((exp_ids[i], exp_ids[j], sim_score))
-            
+
             # 从最相似的 pair 开始合并。
             similar_pairs.sort(key=lambda x: x[2], reverse=True)
-            
+
             if not similar_pairs:
                 print(f"    - Round {round_idx}: No similar pairs found (threshold: {similarity_threshold:.2f}), stopping")
                 break
-            
+
             # Step 2: 逐对强制合并，直到达到 limit 或没有可合并项。
             merged_any = False
             pairs_to_merge = min(len(similar_pairs), len(current) - limit)
-            
+
             for pair_idx, (exp_id1, exp_id2, sim_score) in enumerate(similar_pairs[:pairs_to_merge]):
                 if len(current) <= limit:
                     break
-                
+
                 # 前面的合并可能已经删除了某个 ID。
                 if exp_id1 not in current or exp_id2 not in current:
                     continue
-                
+                if get_experience_kind(current[exp_id1]) != get_experience_kind(current[exp_id2]):
+                    continue
+
                 # 用 LLM 把两个相似经验合成一条。
-                experiences_text = f"[{exp_id1}]\n{current[exp_id1]}\n\n[{exp_id2}]\n{current[exp_id2]}"
+                experiences_text = (
+                    f"[{exp_id1}]\n{format_experience_for_prompt(exp_id1, current[exp_id1])}"
+                    f"\n\n[{exp_id2}]\n{format_experience_for_prompt(exp_id2, current[exp_id2])}"
+                )
                 prompt = MERGE_PROMPT.format(experiences_text=experiences_text)
-                
+
                 try:
                     merged_text = _strip_markdown_code_blocks(llm.chat(prompt).strip())
                     if merged_text:
                         # 删除源经验，再插入合并后的新经验。
                         provider.remove_experience(exp_id1)
                         provider.remove_experience(exp_id2)
-                        
+
                         # 新 ID 放在当前最大 ID 之后，后面会统一重编号。
                         new_id = f"E{_max_exp_id(current) + 1}"
-                        provider.add_experience(new_id, merged_text)
-                        
+                        merged_record = merge_record_metadata(new_id, [current[exp_id1], current[exp_id2]], merged_text)
+                        provider.add_experience(new_id, merged_record)
+
                         # 同步更新 current，保证下一轮看到最新状态。
                         del current[exp_id1]
                         del current[exp_id2]
-                        current[new_id] = merged_text
-                        
+                        current[new_id] = merged_record
+
                         merged_any = True
                         print(f"      - Force merged {exp_id1} and {exp_id2} (similarity: {sim_score:.3f}) into {new_id}")
                     else:
@@ -506,64 +540,65 @@ def _reduce_experiences_to_limit(
                 except Exception as e:
                     print(f"      - Warning: Failed to merge {exp_id1} and {exp_id2}: {e}")
                     continue
-            
+
             if not merged_any:
                 print(f"    - Round {round_idx}: No merges applied, stopping")
                 break
-            
+
             print(f"    - Round {round_idx}: After merging, {len(current)} experiences remain")
-            
+
             # 每轮后刷新 provider，避免用旧经验状态继续检索。
             provider = ExperienceMemoryProvider(current, retriever=retriever)
-            
+
         except Exception as e:
             print(f"    - Round {round_idx}: Error during reduction: {e}")
             import traceback
             traceback.print_exc()
             break
-    
-    return current
+
+    return reassign_experience_ids(current)
 
 
 def refine_experience_library(
-    experiences: Dict[str, str],
+    experiences: Dict[str, Any],
     llm: ExperienceLLM,
     debug_dir: Optional[str] = None,
     max_retries: int = MAX_RETRIES
-) -> Dict[str, str]:
+) -> ExperienceLibrary:
     """
     Perform a global refinement pass on the entire experience library.
-    
+
     This is called after batch_merge to further consolidate redundant experiences
     and improve overall library quality.
-    
+
     Args:
-        experiences: Current experience library {id: text}
+        experiences: Current experience library {id: record or text}
         llm: ExperienceLLM instance
         debug_dir: Optional directory to save debug information
         max_retries: Number of retry attempts
-        
+
     Returns:
-        Refined experience library
+        Refined structured experience library
     """
     # 经验库过大时的全局压缩，对应论文的数量/质量过滤。
+    experiences = normalize_experience_library(experiences)
     if not experiences or len(experiences) < 10:
         # 经验数太少时不值得再调用 LLM refine。
         return experiences
-    
+
     print(f"  [Refine] Starting library refinement: {len(experiences)} experiences")
-    
+
     # 按 ID 顺序拼接经验库，交给 LLM 判断 merge/delete。
     exp_lines = []
     for exp_id in sorted(experiences.keys(), key=lambda x: int(x[1:]) if x[1:].isdigit() else 0):
-        exp_lines.append(f"[{exp_id}] {experiences[exp_id]}")
+        exp_lines.append(f"[{exp_id}] {format_experience_for_prompt(exp_id, experiences[exp_id])}")
     experiences_text = "\n\n".join(exp_lines)
-    
+
     prompt = EXPERIENCE_REFINE_PROMPT.format(
         exp_count=len(experiences),
         experiences=experiences_text
     )
-    
+
     # 保存 refine prompt，便于排查 LLM 压缩决策。
     if debug_dir:
         try:
@@ -572,7 +607,7 @@ def refine_experience_library(
                 f.write(prompt)
         except Exception:
             pass
-    
+
     # 调用 LLM 生成全局 refine 操作列表。
     response = None
     for attempt in range(max_retries):
@@ -586,10 +621,10 @@ def refine_experience_library(
             else:
                 print(f"  [Refine] LLM call failed after {max_retries} attempts: {e}")
                 return experiences
-    
+
     if not response:
         return experiences
-    
+
     # 保存 refine 响应。
     if debug_dir:
         try:
@@ -597,7 +632,7 @@ def refine_experience_library(
                 f.write(response)
         except Exception:
             pass
-    
+
     # 解析 LLM 返回的操作 JSON。
     try:
         if "```json" in response:
@@ -605,7 +640,7 @@ def refine_experience_library(
         else:
             json_match = re.search(r'\[.*\]', response, re.DOTALL)
             payload = json_match.group(0) if json_match else "[]"
-        
+
         operations = json.loads(payload)
         if not isinstance(operations, list):
             print(f"  [Refine] Invalid response format, skipping")
@@ -613,44 +648,44 @@ def refine_experience_library(
     except Exception as e:
         print(f"  [Refine] Failed to parse operations: {e}")
         return experiences
-    
+
     # 应用 merge/delete 操作。
     refined = dict(experiences)
     merge_count = 0
     delete_count = 0
-    
+
     for op in operations:
         option = op.get("option", "")
-        
+
         if option == "merge":
             merged_from = op.get("merged_from", [])
-            merged_text = op.get("experience", "").strip()
-            
+            merged_text = get_experience_content(op.get("experience", op)).strip()
+
             if merged_from and len(merged_from) >= 2 and merged_text:
-                # 只合并当前仍存在的源经验。
+                # 只合并当前仍存在且 kind 一致的源经验。
                 valid_sources = [eid for eid in merged_from if eid in refined]
-                if len(valid_sources) >= 2:
+                source_kinds = {get_experience_kind(refined[eid]) for eid in valid_sources}
+                if len(valid_sources) >= 2 and len(source_kinds) == 1:
+                    source_records = [refined[eid] for eid in valid_sources]
                     # 删除源经验。
                     for eid in valid_sources:
                         del refined[eid]
-                    # 插入合并后的经验。
+                    # 插入合并后的结构化经验。
                     new_id = f"E{_max_exp_id(refined, default=-1) + 1}"
-                    refined[new_id] = merged_text
+                    refined[new_id] = merge_record_metadata(new_id, source_records, merged_text)
                     merge_count += 1
-                    print(f"    - Merged {valid_sources} → {new_id}")
-        
+                    print(f"    - Merged {valid_sources} -> {new_id}")
+
         elif option == "delete":
             deleted_id = op.get("deleted_id", "")
             if deleted_id and deleted_id in refined:
                 del refined[deleted_id]
                 delete_count += 1
                 print(f"    - Deleted {deleted_id}")
-    
+
     # 最终再重编号，保持经验 ID 连续。
-    final = {}
-    for idx, (_, text) in enumerate(sorted(refined.items(), key=lambda x: int(x[0][1:]) if x[0][1:].isdigit() else 0)):
-        final[f"E{idx}"] = text
-    
-    print(f"  [Refine] Complete: {len(experiences)} → {len(final)} ({merge_count} merges, {delete_count} deletes)")
-    
+    final = reassign_experience_ids(refined)
+
+    print(f"  [Refine] Complete: {len(experiences)} -> {len(final)} ({merge_count} merges, {delete_count} deletes)")
+
     return final

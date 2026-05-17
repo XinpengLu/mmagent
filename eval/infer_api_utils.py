@@ -9,7 +9,20 @@ import logging
 import copy
 from typing import Dict, List, Optional, Any, Callable
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
-from exskill import ExperienceLLM, ExperienceRetriever, load_experiences, format_for_prompt, rewrite_experiences_for_task, adapt_skill_for_task
+from exskill import (
+    ExperienceLLM,
+    ExperienceRetriever,
+    collect_linked_experiences,
+    format_for_prompt,
+    format_selected_skills_for_prompt,
+    load_experiences,
+    rerank_experiences_for_skills,
+    rewrite_experiences_for_task,
+    select_skills_for_task,
+    update_memory_usage_after_sample,
+    adapt_skill_for_task,
+)
+from exskill.experience_schema import format_experience_for_prompt
 from prompts.skill_prompts_test_time import SKILL_INJECTION_HEADER
 from engine.api_processors import set_global_prompts as set_processors_prompts
 from qwen_vl_utils import fetch_image
@@ -153,6 +166,8 @@ def retrieve_experiences_for_sample(sample, args, experience_retriever, base_sys
         
         # --- 1. Experience Retrieval (optional) ---
         retrieved_exps, retrieval_info, original_retrieved_exps = {}, {}, None
+        direct_retrieved_ids, linked_experience_ids = [], []
+        selected_skills = []
         use_rewrite = getattr(args, 'experience_retrieval_rewrite', False)
         llm_client = None
         
@@ -177,75 +192,137 @@ def retrieve_experiences_for_sample(sample, args, experience_retriever, base_sys
             
             if not retrieved_exps:
                 print(f"  [Retrieval] No relevant experiences found for {question_id}")
-            
-            if retrieved_exps and use_rewrite:
-                original_retrieved_exps = copy.deepcopy(retrieved_exps)
-                llm_client = experience_retriever.llm_client or ExperienceLLM()
-                print(f"  [Retrieval] Rewriting {len(retrieved_exps)} experiences...")
-                # 经验重写：把历史经验改成更贴合当前题目的提示。
-                retrieved_exps = rewrite_experiences_for_task(retrieved_exps, query_text, llm_client, images)
-        
-        # --- 2. Skill Processing (optional) ---
+
+            direct_retrieved_ids = list(retrieved_exps.keys())
+
+        # --- 2. Skill Selection (optional) ---
+        if skill_enabled:
+            selected_skills = select_skills_for_task(
+                args.skill_library,
+                query_text,
+                retrieval_info=retrieval_info,
+                top_k=getattr(args, 'skill_selection_top_k', 2),
+            )
+            if selected_skills:
+                selected_skill_ids = [skill["skill_id"] for skill in selected_skills]
+                print(f"  [Skill] Selected {len(selected_skills)} modular skill(s): {', '.join(selected_skill_ids)}")
+                try:
+                    if experience_retriever is not None:
+                        all_experiences = experience_retriever.experiences
+                    elif getattr(args, 'experience_library', None):
+                        all_experiences = load_experiences(args.experience_library)
+                    else:
+                        all_experiences = {}
+                    linked_exps = collect_linked_experiences(selected_skills, all_experiences)
+                    linked_experience_ids = list(linked_exps.keys())
+                    retrieved_exps = rerank_experiences_for_skills(
+                        retrieved_exps,
+                        linked_exps,
+                        selected_skill_ids,
+                        max_items=getattr(args, 'skill_linked_experience_max_items', 8),
+                    )
+                except Exception as e:
+                    print(f"  [Skill] Warning: failed to collect linked experiences: {e}")
+                # 多 skill 路径下保留原始结构化经验，不再做 LLM rewrite/adaptation。
+                use_rewrite = False
+
+        if retrieved_exps and use_rewrite:
+            original_retrieved_exps = copy.deepcopy(retrieved_exps)
+            llm_client = experience_retriever.llm_client or ExperienceLLM()
+            print(f"  [Retrieval] Rewriting {len(retrieved_exps)} experiences...")
+            # 经验重写：把历史经验改成更贴合当前题目的提示。
+            retrieved_exps = rewrite_experiences_for_task(retrieved_exps, query_text, llm_client, images)
+
+        # --- 3. Skill Processing (optional) ---
         skill_injection = ""
-        if skill_enabled and os.path.exists(args.skill_library):
-            # 技能处理：读取 SKILL.md，并按当前题目做可选适配。
-            skill_injection = _process_skill(args, query_text, retrieved_exps, images, llm_client, sample_dir, question_id)
-        
-        # --- 3. Build Final Injection ---
+        if skill_enabled and (selected_skills or os.path.exists(args.skill_library)):
+            # 技能处理：优先注入已选择的模块化 skill；无 index 时退回旧的 SKILL.md 逻辑。
+            skill_injection = _process_skill(
+                args, query_text, retrieved_exps, images, llm_client, sample_dir, question_id,
+                selected_skills=selected_skills,
+            )
+
+        # --- 4. Build Final Injection ---
         exp_injection = format_for_prompt(retrieved_exps, max_items=len(retrieved_exps)) if retrieved_exps else ""
-        
-        # Build final injection: combine skill and experience when appropriate
-        use_adaptation = getattr(args, 'skill_adaptation', True)
-        
+
         if skill_injection and exp_injection:
-            # 适配后的 skill 已吸收经验信息；raw skill 模式下才同时注入经验。
-            if skill_enabled and not use_adaptation:
-                full_injection = f"{skill_injection}\n\n{exp_injection}"
-                print(f"  [Injection] Combined raw skill + experiences for {question_id}")
-            else:
-                full_injection = skill_injection
+            # 多 skill 路径下显式同时注入 skill 和结构化 experience，避免经验只被隐式“吸收”。
+            full_injection = f"{skill_injection}\n\n{exp_injection}"
+            print(f"  [Injection] Combined skill + experiences for {question_id}")
         elif skill_injection:
             full_injection = skill_injection
         elif exp_injection:
             full_injection = exp_injection
         else:
             full_injection = ""
-        
+
         dynamic_system_prompt = (
             f"{full_injection}\n\n{base_system_prompt}" if full_injection and base_system_prompt
             else (full_injection or base_system_prompt)
         )
-        
+
         # 保存样本级检索/重写细节，便于复现实验和后续经验更新。
         if exp_enabled and sample_dir:
-            save_retrieval_info(experience_retriever, sample_dir, retrieved_exps or None, 
+            save_retrieval_info(experience_retriever, sample_dir, retrieved_exps or None,
                               original_retrieved_exps, use_rewrite, retrieval_info=retrieval_info)
-        
+
+        if sample_dir:
+            usage = {
+                "question_id": question_id,
+                "selected_skill_ids": [skill["skill_id"] for skill in selected_skills],
+                "selected_skills": [
+                    {
+                        "skill_id": skill["skill_id"],
+                        "score": skill.get("score"),
+                        "linked_experience_ids": skill.get("metadata", {}).get("linked_experience_ids", []),
+                    }
+                    for skill in selected_skills
+                ],
+                "direct_retrieved_experience_ids": direct_retrieved_ids,
+                "linked_experience_ids": linked_experience_ids,
+                "retrieved_experience_ids": list((retrieved_exps or {}).keys()),
+                "rewrite_used": bool(use_rewrite),
+            }
+            with open(os.path.join(sample_dir, "tt_memory_usage.json"), "w", encoding="utf-8") as f:
+                json.dump(usage, f, ensure_ascii=False, indent=2)
+
         return _finalize_prompt(args, dynamic_system_prompt, update_global_prompts)
-        
+
     except Exception as e:
         logger.warning(f"Failed to process for {question_id}: {e}", exc_info=True)
         print(f"  [Pipeline] Warning: {e}")
         return _finalize_prompt(args, base_system_prompt, update_global_prompts)
 
 
-def _process_skill(args, query_text, retrieved_exps, images, llm_client, sample_dir, question_id):
+def _process_skill(args, query_text, retrieved_exps, images, llm_client, sample_dir, question_id, selected_skills=None):
     """Process skill: adapt or use raw based on skill_adaptation flag.
         流程技能：根据“技能适应”标志来调整或使用原始数据。
     """
     # 对应论文中的 Skill Adaptation。
     try:
+        if selected_skills:
+            # 模块化 skill 直接按索引选择后注入，不再做 LLM 改写。
+            skill_content = format_selected_skills_for_prompt(selected_skills)
+            print(f"  [Skill] Injecting selected modular skills for {question_id}")
+            if sample_dir:
+                with open(os.path.join(sample_dir, "tt_selected_skills.md"), 'w', encoding='utf-8') as f:
+                    f.write(skill_content)
+            return SKILL_INJECTION_HEADER.format(skill_content=skill_content)
+
         with open(args.skill_library, 'r', encoding='utf-8') as f:
             base_skill = f.read()
-        
+
         use_adaptation = getattr(args, 'skill_adaptation', True)  # Default: adapt
-        
+
         # 适配模式需要 LLM 把通用 skill 改写成样本专用 skill。
         if use_adaptation and llm_client is None:
             llm_client = ExperienceLLM()
-        
-        exp_text = "\n\n".join(f"--- {k} ---\n{v}" for k, v in retrieved_exps.items()) if retrieved_exps else ""
-        
+
+        exp_text = "\n\n".join(
+            f"--- {k} ---\n{format_experience_for_prompt(k, v)}"
+            for k, v in retrieved_exps.items()
+        ) if retrieved_exps else ""
+
         if use_adaptation:
             # === Standard Adaptation Mode ===
             adapted_skill = adapt_skill_for_task(base_skill, exp_text, query_text, llm_client, images)
@@ -462,7 +539,7 @@ def save_retrieval_info(experience_retriever, sample_dir, retrieved_exps=None, o
             for exp_id, exp_text in original_retrieved_exps.items():
                 f.write(f"\n[{exp_id}]\n")
                 f.write("-" * 80 + "\n")
-                f.write(exp_text)
+                f.write(format_experience_for_prompt(exp_id, exp_text))
                 f.write("\n\n")
         
         # 写入最终注入给模型的经验文本。
@@ -474,7 +551,7 @@ def save_retrieval_info(experience_retriever, sample_dir, retrieved_exps=None, o
             for exp_id, exp_text in retrieved_exps.items():
                 f.write(f"\n[{exp_id}]\n")
                 f.write("-" * 80 + "\n")
-                f.write(exp_text)
+                f.write(format_experience_for_prompt(exp_id, exp_text))
                 f.write("\n\n")
         else:
             f.write("\nNo relevant experiences were retrieved for this query.\n")
@@ -951,6 +1028,13 @@ def execute_pipeline_parallel_processing(
                             compute_and_save_sample_summary(
                                 sample_info['question_id'], sample_info['results'],
                                 args.rollouts_per_sample, sample_info['sample_dir']
+                            )
+                            update_memory_usage_after_sample(
+                                getattr(args, 'experience_library', None),
+                                getattr(args, 'skill_library', None),
+                                sample_info['sample_dir'],
+                                sample_info['sample'],
+                                sample_info['results'],
                             )
 
         pbar.close()
