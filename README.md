@@ -281,3 +281,7 @@ output/full_benchmark/TIR-Bench/test/average_pass_at_k.json
 
   当前代码的实际问题：当前 tt_decomposition_info.txt 里只记录了检索到的 experience ID，但没有把相似度分数完整写出来。所以你不太容易从输出文件判断：E3 是 0.82 检索到的，还是 0.05 检索到的。如果你想分析检索质量，建议后面把 similarity score 也写进 retrieval_info。当前代码里只在 debug logger 里有类似信息，不一定会落盘。
 
+2. 问题：大模型喜欢走捷径，我给了它skill和经验，他很自信觉得能够答对，直接不用工具进行图文推理导致回答错误。
+
+## 修改
+1. 0517: 增加了断点续跑，中途断了之后如果样本目录已有指标值，会自动跳过，不会跑已完成样本。
