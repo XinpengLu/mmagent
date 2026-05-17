@@ -801,6 +801,10 @@ def execute_pipeline_parallel_processing(
             actual_sample_idx = sample_indices[local_idx]
             question_id = sample_results_dict[actual_sample_idx]['question_id']
             sample_dir = sample_results_dict[actual_sample_idx]['sample_dir']
+            sample_summary_path = os.path.join(sample_dir, SAMPLE_SUMMARY_FILENAME)
+            if getattr(args, 'skip_completed', False) and os.path.exists(sample_summary_path):
+                print(f"  [Pipeline] Sample {question_id}: already has {SAMPLE_SUMMARY_FILENAME}, skipping...")
+                continue
             sample_args = prepare_sample_args(args)
             pending_retrieval_samples.append({
                 'sample_idx': actual_sample_idx,
@@ -812,6 +816,13 @@ def execute_pipeline_parallel_processing(
 
         # 进度条按 rollout 数计数，而不是按样本数计数。
         total_rollouts = len(samples) * args.rollouts_per_sample
+        skipped_rollouts = (len(samples) - len(pending_retrieval_samples)) * args.rollouts_per_sample
+        if skipped_rollouts:
+            print(f"  [Pipeline] Skipped {skipped_rollouts} completed rollout(s).")
+        total_rollouts = len(pending_retrieval_samples) * args.rollouts_per_sample
+        if total_rollouts == 0:
+            print("  [Pipeline] All samples in this batch are already completed.")
+            return
         pbar = tqdm(total=total_rollouts, desc=progress_desc or "Processing rollouts")
         
         rollout_counts = {}  # track completed rollouts per sample

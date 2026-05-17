@@ -131,6 +131,11 @@ LOG_OUTPUT_DIR="${LOG_OUTPUT_DIR:-$DATA_ROOT/logs/test_exskill_1}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
 EXPERIENCE_LARGE_BATCH="${EXPERIENCE_LARGE_BATCH:-8}"
 ROLLOUTS_PER_SAMPLE="${ROLLOUTS_PER_SAMPLE:-2}"
+SKIP_COMPLETED="${SKIP_COMPLETED:-1}"
+SKIP_COMPLETED_ARGS=()
+if [[ "$SKIP_COMPLETED" == "1" || "$SKIP_COMPLETED" == "true" || "$SKIP_COMPLETED" == "TRUE" ]]; then
+    SKIP_COMPLETED_ARGS=(--skip-completed)
+fi
 
 MAX_SAMPLES="${MAX_SAMPLES:-16}"
 
@@ -152,6 +157,7 @@ python3 -u eval/infer_api.py \
     --system-prompt-key $SYSTEM_PROMPT_TYPE \
     --num-workers $NUM_WORKERS \
     --tool-config-path $TOOL_CONFIG_PATH \
+    "${SKIP_COMPLETED_ARGS[@]}" \
     --max-samples $MAX_SAMPLES \
     --rollouts-per-sample $ROLLOUTS_PER_SAMPLE \
     --image-search-max-calls $IMAGE_SEARCH_MAX_CALLS \
