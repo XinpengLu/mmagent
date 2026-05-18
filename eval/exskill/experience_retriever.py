@@ -552,83 +552,143 @@ class ExperienceRetriever:
         query: str,
         top_k: int = TOP_K_RETRIEVE,
         min_similarity: float = MIN_SIMILARITY,
+        images: Optional[List[Any]] = None,
+        mmr_lambda: float = 0.7,
     ) -> Tuple[Dict[str, str], Dict[str, Any]]:
         """
-        Retrieve top-k most relevant experiences for a query.
-        根据查询内容检索出与之最相关的前 k 项经验
+        Retrieve top-k most relevant experiences for a query using MMR for diversity.
 
         Args:
-            query: Query text to search for 用于搜索的查询文本
+            query: Query text to search for
             top_k: Number of top experiences to retrieve
             min_similarity: Minimum similarity threshold (0.0 to 1.0)
-            
+            images: Optional list of PIL.Image objects for visual-context enrichment
+            mmr_lambda: Balance between relevance (1.0) and diversity (0.0)
+
         Returns:
-            Tuple of:
-            - Dictionary mapping experience IDs to experience text, sorted by relevance
-            一个将经验 ID 映射到经验文本的字典，按相关性排序
-            - Retrieval info dictionary containing:
-                - original_query: The query used for retrieval
-                - decomposition_used: False (always False for retrieve())
-                - retrieved_experiences: List of retrieved experience IDs 检索到的经验 ID 列表
-                - total_unique_experiences: Number of unique experiences retrieved 经验数量
+            Tuple of (experiences dict, retrieval_info dict)
         """
-        # 单查询检索：用 embedding 相似度取 top-k 经验。
         empty_info = {
             "original_query": query,
             "decomposition_used": False,
             "subtasks": [],
             "retrieved_experiences": [],
             "retrieval_details": [],
-            "total_unique_experiences": 0
+            "total_unique_experiences": 0,
+            "similarity_scores": {},
         }
         if not self._experience_embeddings:
             logger.warning("No experience embeddings available, returning empty result")
             return {}, empty_info
 
-        # 先为当前 query 生成 embedding
+        if images and self.llm_client:
+            visual_ctx = self._describe_images_for_query(images)
+            if visual_ctx:
+                query = f"{visual_ctx} {query}"
+
         query_embedding = self._generate_embedding(query)
         if query_embedding is None:
             logger.warning("Failed to generate query embedding, returning empty result")
             return {}, empty_info
 
-        # 把所有经验向量堆成矩阵，一次性计算 query 与经验库的余弦相似度
         exp_ids = list(self._experience_embeddings.keys())
         exp_matrix = np.vstack([self._experience_embeddings[eid] for eid in exp_ids])
         q = query_embedding.reshape(1, -1)
         sim_scores = cosine_similarity(q, exp_matrix)[0]
-        similarities = [(exp_ids[i], float(sim_scores[i])) for i in range(len(exp_ids)) if sim_scores[i] >= min_similarity]
-        similarities.sort(key=lambda x: x[1], reverse=True)
-        
-        # 按相似度从高到低截取 top-k。
-        top_similarities = similarities[:top_k]
-        
-        # dict 保持插入顺序，因此结果顺序就是相似度顺序。
+
+        if mmr_lambda < 1.0 and len(exp_ids) > top_k:
+            top_similarities = self._mmr_select(
+                exp_ids, exp_matrix, sim_scores, top_k, mmr_lambda, min_similarity
+            )
+        else:
+            similarities = [
+                (exp_ids[i], float(sim_scores[i]))
+                for i in range(len(exp_ids)) if sim_scores[i] >= min_similarity
+            ]
+            similarities.sort(key=lambda x: x[1], reverse=True)
+            top_similarities = similarities[:top_k]
+
         result = {
             exp_id: self.experiences[exp_id]
             for exp_id, _ in top_similarities
         }
-        
-        # 返回检索详情；并行场景下应优先使用返回值而非实例变量。
+
         retrieval_info = {
             "original_query": query,
             "decomposition_used": False,
             "subtasks": [],
             "retrieved_experiences": list(result.keys()),
             "retrieval_details": [],
-            "total_unique_experiences": len(result)
+            "total_unique_experiences": len(result),
+            "similarity_scores": {exp_id: sim for exp_id, sim in top_similarities},
         }
-        
-        # 兼容旧接口 get_last_retrieval_info；并发时可能被其他样本覆盖。
+
         if not self._last_retrieval_info or not self._last_retrieval_info.get("decomposition_used", False):
             self._last_retrieval_info = retrieval_info.copy()
-        
+
         if result:
             logger.debug(
                 f"Retrieved {len(result)} experiences for query "
                 f"(similarities: {[f'{s:.3f}' for _, s in top_similarities[:3]]}...)"
             )
-        
+
         return result, retrieval_info
+
+    def _mmr_select(
+        self,
+        exp_ids: List[str],
+        exp_matrix: np.ndarray,
+        sim_scores: np.ndarray,
+        top_k: int,
+        lambda_param: float,
+        min_sim: float,
+    ) -> List[Tuple[str, float]]:
+        """Maximal Marginal Relevance: balance relevance with diversity."""
+        candidates = [i for i in range(len(exp_ids)) if sim_scores[i] >= min_sim]
+        if not candidates:
+            return []
+        selected: List[Tuple[str, float]] = []
+        selected_indices: List[int] = []
+        for _ in range(min(top_k, len(candidates))):
+            best_idx, best_score = -1, -float('inf')
+            for i in candidates:
+                if i in selected_indices:
+                    continue
+                if not selected_indices:
+                    mmr = float(sim_scores[i])
+                else:
+                    sel_matrix = exp_matrix[selected_indices]
+                    max_sim_to_selected = float(
+                        cosine_similarity(exp_matrix[i:i+1], sel_matrix).max()
+                    )
+                    mmr = lambda_param * float(sim_scores[i]) - (1 - lambda_param) * max_sim_to_selected
+                if mmr > best_score:
+                    best_score, best_idx = mmr, i
+            if best_idx < 0:
+                break
+            selected.append((exp_ids[best_idx], float(sim_scores[best_idx])))
+            selected_indices.append(best_idx)
+        return selected
+
+    def _describe_images_for_query(self, images: List[Any]) -> str:
+        """Generate a short visual description of images to enrich the retrieval query."""
+        try:
+            prompt = "Describe the visual characteristics of this image in 1-2 sentences for retrieval purposes (lighting, objects, layout, challenges)."
+            user_content = _build_multimodal_user_content(prompt, images[:1])
+            resp = self.llm_client._call_with_fallback(
+                user_content=user_content,
+                max_tokens=128,
+                temperature=0.1,
+                top_p=1.0,
+                primary_api_name="Primary Experience API",
+                fallback_api_name="Fallback Experience API",
+                require_chat_completions=True,
+                return_placeholder_on_error=False,
+            )
+            return resp.strip() if resp else ""
+        except Exception as e:
+            logger.debug(f"Visual description failed: {e}")
+            return ""
     
     def get_embedding_stats(self) -> Dict[str, Any]:
         """Get statistics about loaded embeddings."""
@@ -774,60 +834,71 @@ class ExperienceRetriever:
                 "LLM client is required for decomposition-based retrieval. "
                 "Pass llm_client to ExperienceRetriever.__init__ or use retrieve() instead"
             )
-        
+
+        # Skip decomposition for small libraries — MMR provides sufficient diversity
+        if len(self.experiences) <= 20:
+            print(f"  [Decomposition] Library size {len(self.experiences)} <= 20, using direct MMR retrieval")
+            result, retrieval_info = self.retrieve(
+                task_description, top_k=top_k, min_similarity=min_similarity, images=images
+            )
+            self._last_retrieval_info = retrieval_info.copy()
+            return result, retrieval_info
+
         # subtask_top_k 控制每个子任务各自召回多少条经验。
         if subtask_top_k is None:
             subtask_top_k = top_k
-        
+
         # Step 1: 使用 LLM 把原始题目拆成多个检索 query。
         print(f"  [Decomposition] Decomposing task into subtasks...")
         subtasks = self._decompose_task_llm(task_description, images=images)
-        
+
         if not subtasks:
             print(f"  [Decomposition] Warning: Task decomposition returned no subtasks, falling back to direct retrieval")
             logger.warning("Task decomposition returned no subtasks, falling back to direct retrieval")
-            result, retrieval_info = self.retrieve(task_description, top_k=top_k, min_similarity=min_similarity)
+            result, retrieval_info = self.retrieve(task_description, top_k=top_k, min_similarity=min_similarity, images=images)
             # 兼容旧接口。
             self._last_retrieval_info = retrieval_info.copy()
             return result, retrieval_info
         
         # Step 2: 对每个子任务分别做向量检索。
-        all_results: Dict[str, str] = {}  # Use dict to automatically deduplicate by key
-        retrieval_details = []  # Store details for each subtask retrieval
-        
+        all_results: Dict[str, str] = {}
+        all_similarity_scores: Dict[str, float] = {}
+        retrieval_details = []
+
         for subtask in subtasks:
             query = subtask.get("query", "")
             if not query:
                 continue
-            
-            # 复用单查询检索逻辑。
-            result, _ = self.retrieve(
+
+            result, sub_info = self.retrieve(
                 query=query,
-                top_k=subtask_top_k,  # Retrieve subtask_top_k experiences per subtask
+                top_k=subtask_top_k,
                 min_similarity=min_similarity
             )
-            
-            # 记录该子任务召回了哪些经验，供日志分析。
+
             retrieval_details.append({
                 "subtask_type": subtask.get("type", "unknown"),
                 "query": query,
                 "retrieved_experience_ids": list(result.keys()),
                 "count": len(result)
             })
-            
-            # 合并去重：同一经验第一次出现的位置保留下来。
+
             for exp_id, exp_text in result.items():
                 if exp_id not in all_results:
                     all_results[exp_id] = exp_text
-                
-        # 汇总所有子任务的检索信息。
+                sub_sim = sub_info.get("similarity_scores", {}).get(exp_id, 0.0)
+                all_similarity_scores[exp_id] = max(
+                    all_similarity_scores.get(exp_id, 0.0), sub_sim
+                )
+
         retrieval_info = {
             "original_query": task_description,
             "decomposition_used": True,
             "subtasks": subtasks,
             "retrieved_experiences": list(all_results.keys()),
             "retrieval_details": retrieval_details,
-            "total_unique_experiences": len(all_results)
+            "total_unique_experiences": len(all_results),
+            "similarity_scores": all_similarity_scores,
         }
         
         # 兼容旧接口；并发时仍建议用返回的 retrieval_info。
@@ -851,26 +922,15 @@ def rewrite_experiences_for_task(
     task_description: str,
     llm_client: Any,  # ExperienceLLM instance
     images: Optional[List[Any]] = None,
+    force_rewrite: bool = False,
 ) -> Dict[str, str]:
     """
     Rewrite retrieved experiences to better fit a specific task.
-    将获取到的经验进行重新整理，使其更符合特定任务的需求
-    
-    Args:
-        experiences: Dictionary mapping experience IDs to experience text
-        task_description: The current task description
-        llm_client: ExperienceLLM instance for calling LLM
-        images: Optional list of PIL.Image objects (for multimodal rewrite)
-        
-    Returns:
-        Dictionary mapping experience IDs to rewritten experience text
-        (If rewrite fails, returns original experiences as fallback)
-        将经验ID与重写后的经验文本进行映射的字典
-        （若重写失败，则返回原始经验作为备用选项）
+
+    With structured experiences (trigger + code_template), rewrite is unnecessary
+    by default. Pass force_rewrite=True for ablation studies.
     """
-    # 对应 Phase II / Experience Rewrite：把通用经验改写为当前任务可用建议。
-    
-    if not experiences:
+    if not experiences or not force_rewrite:
         return experiences
     
     try:

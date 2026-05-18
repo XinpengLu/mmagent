@@ -349,15 +349,17 @@ How to Zoom:
         # Merge image loading code with user code
         full_code = image_load_code + code
 
-        # Safety check
-        if 'exit' in code.lower():
-            return 'Error: Using exit() is not allowed'
-        
         # Syntax check
         try:
-            ast.parse(code)
+            tree = ast.parse(code)
         except SyntaxError as e:
             return f'SyntaxError: {e}'
+
+        # Safety check: block actual exit()/quit() calls, not substrings
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                if node.func.id in ('exit', 'quit'):
+                    return 'Error: Using exit() is not allowed'
         
         # After saving input images, record file list before execution (to detect newly generated images)
         # This excludes input images and previously preserved user-saved files

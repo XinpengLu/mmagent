@@ -15,10 +15,12 @@ from exskill import (
     collect_linked_experiences,
     format_for_prompt,
     format_selected_skills_for_prompt,
+    load_skill_index,
+    rerank_memory_with_llm,
     load_experiences,
-    rerank_experiences_for_skills,
+    retrieve_skills_for_task,
     rewrite_experiences_for_task,
-    select_skills_for_task,
+    skill_index_path,
     update_memory_usage_after_sample,
     adapt_skill_for_task,
 )
@@ -140,8 +142,8 @@ def initialize_experience_retriever(args):
     return experience_retriever, system_prompt
 
 
-def retrieve_experiences_for_sample(sample, args, experience_retriever, base_system_prompt, 
-                                     question_id, sample_dir, update_global_prompts=True):
+def retrieve_experiences_for_sample(sample, args, experience_retriever, base_system_prompt,
+                                     question_id, sample_dir, update_global_prompts=False):
     """
     Retrieve experiences and/or inject skills for a single sample.
     Supports: Experience only, Skill only, or both combined.
@@ -167,6 +169,7 @@ def retrieve_experiences_for_sample(sample, args, experience_retriever, base_sys
         # --- 1. Experience Retrieval (optional) ---
         retrieved_exps, retrieval_info, original_retrieved_exps = {}, {}, None
         direct_retrieved_ids, linked_experience_ids = [], []
+        skill_retrieval_info, memory_rerank_info = {}, {}
         selected_skills = []
         use_rewrite = getattr(args, 'experience_retrieval_rewrite', False)
         llm_client = None
@@ -177,7 +180,7 @@ def retrieve_experiences_for_sample(sample, args, experience_retriever, base_sys
                 # 分解检索：先拆成子任务，再分别召回经验并去重。
                 retrieved_exps, retrieval_info = experience_retriever.retrieve_with_decomposition(
                     task_description=query_text,
-                    top_k=getattr(args, 'experience_retrieval_top_k', 5),
+                    top_k=getattr(args, 'experience_retrieval_top_k', 3),
                     min_similarity=getattr(args, 'experience_retrieval_min_similarity', 0.0),
                     subtask_top_k=getattr(args, 'experience_retrieval_subtask_top_k', None),
                     images=images,
@@ -186,8 +189,9 @@ def retrieve_experiences_for_sample(sample, args, experience_retriever, base_sys
                 # 普通检索：直接用整道题作为 query 做向量召回。
                 retrieved_exps, retrieval_info = experience_retriever.retrieve(
                     query=query_text,
-                    top_k=getattr(args, 'experience_retrieval_top_k', 5),
+                    top_k=getattr(args, 'experience_retrieval_top_k', 3),
                     min_similarity=getattr(args, 'experience_retrieval_min_similarity', 0.0),
+                    images=images,
                 )
             
             if not retrieved_exps:
@@ -196,35 +200,85 @@ def retrieve_experiences_for_sample(sample, args, experience_retriever, base_sys
             direct_retrieved_ids = list(retrieved_exps.keys())
 
         # --- 2. Skill Selection (optional) ---
+        has_modular_skill_index = False
+        all_experiences = {}
         if skill_enabled:
-            selected_skills = select_skills_for_task(
+            skill_index = load_skill_index(args.skill_library)
+            modular_index_exists = os.path.exists(skill_index_path(args.skill_library))
+            has_modular_skill_index = modular_index_exists or bool(skill_index.get("skills"))
+            if experience_retriever is not None:
+                all_experiences = experience_retriever.experiences
+            elif getattr(args, 'experience_library', None):
+                all_experiences = load_experiences(args.experience_library)
+            embedding_endpoint = (
+                getattr(args, 'experience_embedding_endpoint', None)
+                or os.environ.get("EXPERIENCE_EMBEDDING_ENDPOINT")
+                or os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1")
+            )
+            if embedding_endpoint and not embedding_endpoint.endswith("/v1"):
+                embedding_endpoint = embedding_endpoint.rstrip("/") + "/v1"
+            skill_candidates, skill_retrieval_info = retrieve_skills_for_task(
                 args.skill_library,
                 query_text,
                 retrieval_info=retrieval_info,
-                top_k=getattr(args, 'skill_selection_top_k', 2),
+                top_k=getattr(args, 'skill_retrieval_top_k', 3),
+                min_similarity=getattr(args, 'skill_retrieval_min_similarity', 0.0),
+                available_experience_ids=set(all_experiences.keys()) if all_experiences else None,
+                embedding_model=os.environ.get("EXPERIENCE_EMBEDDING_MODEL", "text-embedding-3-small"),
+                embedding_api_key=(
+                    getattr(args, 'experience_embedding_api_key', None)
+                    or os.environ.get("EXPERIENCE_EMBEDDING_API_KEY")
+                    or os.environ.get("OPENAI_API_KEY")
+                ),
+                embedding_endpoint=embedding_endpoint,
+                enable_cache=getattr(args, 'experience_embedding_cache_enable', True),
             )
-            if selected_skills:
-                selected_skill_ids = [skill["skill_id"] for skill in selected_skills]
-                print(f"  [Skill] Selected {len(selected_skills)} modular skill(s): {', '.join(selected_skill_ids)}")
+            if skill_candidates:
+                candidate_skill_ids = [skill["skill_id"] for skill in skill_candidates]
+                print(f"  [Skill] Retrieved {len(skill_candidates)} modular skill candidate(s): {', '.join(candidate_skill_ids)}")
                 try:
-                    if experience_retriever is not None:
-                        all_experiences = experience_retriever.experiences
-                    elif getattr(args, 'experience_library', None):
-                        all_experiences = load_experiences(args.experience_library)
-                    else:
-                        all_experiences = {}
+                    linked_exps = collect_linked_experiences(skill_candidates, all_experiences)
+                    linked_experience_ids = list(linked_exps.keys())
+                    candidate_exps = dict(retrieved_exps or {})
+                    for exp_id, record in linked_exps.items():
+                        if exp_id not in candidate_exps:
+                            candidate_exps[exp_id] = record
+                    if llm_client is None:
+                        llm_client = experience_retriever.llm_client if experience_retriever is not None else None
+                    if llm_client is None:
+                        llm_client = ExperienceLLM()
+                    selected_skills, retrieved_exps, memory_rerank_info = rerank_memory_with_llm(
+                        query_text=query_text,
+                        candidate_skills=skill_candidates,
+                        candidate_experiences=candidate_exps,
+                        llm=llm_client,
+                        max_skills=getattr(args, 'memory_rerank_top_skills', 2),
+                        max_experiences=getattr(args, 'memory_rerank_top_experiences', 8),
+                        debug_dir=sample_dir,
+                        question_id=question_id,
+                    )
+                    selected_skill_ids = [skill["skill_id"] for skill in selected_skills]
+                    selected_linked_exps = collect_linked_experiences(selected_skills, all_experiences)
+                    linked_experience_ids = [
+                        exp_id for exp_id in selected_linked_exps.keys()
+                        if exp_id in (retrieved_exps or {})
+                    ]
+                    print(f"  [Memory Rerank] Selected {len(selected_skills)} skill(s) and {len(retrieved_exps)} experience(s)")
+                    if selected_skill_ids:
+                        print(f"  [Skill] Selected modular skill(s): {', '.join(selected_skill_ids)}")
+                except Exception as e:
+                    print(f"  [Skill] Warning: failed to rerank skill-linked memories: {e}")
+                    selected_skills = skill_candidates[:getattr(args, 'memory_rerank_top_skills', 2)]
                     linked_exps = collect_linked_experiences(selected_skills, all_experiences)
                     linked_experience_ids = list(linked_exps.keys())
-                    retrieved_exps = rerank_experiences_for_skills(
-                        retrieved_exps,
-                        linked_exps,
-                        selected_skill_ids,
-                        max_items=getattr(args, 'skill_linked_experience_max_items', 8),
-                    )
-                except Exception as e:
-                    print(f"  [Skill] Warning: failed to collect linked experiences: {e}")
+                    retrieved_exps = dict(retrieved_exps or {})
+                    for exp_id, record in linked_exps.items():
+                        if exp_id not in retrieved_exps:
+                            retrieved_exps[exp_id] = record
                 # 多 skill 路径下保留原始结构化经验，不再做 LLM rewrite/adaptation。
                 use_rewrite = False
+            elif has_modular_skill_index:
+                print(f"  [Skill] No modular skill matched {question_id}; skipping skill injection.")
 
         if retrieved_exps and use_rewrite:
             original_retrieved_exps = copy.deepcopy(retrieved_exps)
@@ -235,7 +289,8 @@ def retrieve_experiences_for_sample(sample, args, experience_retriever, base_sys
 
         # --- 3. Skill Processing (optional) ---
         skill_injection = ""
-        if skill_enabled and (selected_skills or os.path.exists(args.skill_library)):
+        legacy_skill_available = skill_enabled and not has_modular_skill_index and os.path.exists(args.skill_library)
+        if skill_enabled and (selected_skills or legacy_skill_available):
             # 技能处理：优先注入已选择的模块化 skill；无 index 时退回旧的 SKILL.md 逻辑。
             skill_injection = _process_skill(
                 args, query_text, retrieved_exps, images, llm_client, sample_dir, question_id,
@@ -282,6 +337,9 @@ def retrieve_experiences_for_sample(sample, args, experience_retriever, base_sys
                 "linked_experience_ids": linked_experience_ids,
                 "retrieved_experience_ids": list((retrieved_exps or {}).keys()),
                 "rewrite_used": bool(use_rewrite),
+                "similarity_scores": retrieval_info.get("similarity_scores", {}),
+                "skill_retrieval_info": skill_retrieval_info,
+                "memory_rerank_info": memory_rerank_info,
             }
             with open(os.path.join(sample_dir, "tt_memory_usage.json"), "w", encoding="utf-8") as f:
                 json.dump(usage, f, ensure_ascii=False, indent=2)
@@ -605,87 +663,75 @@ def compute_and_save_sample_summary(question_id, sample_rollout_results, rollout
 
 def check_sample_completed(sample_dir, args):
     """
-    Check if a sample is already completed (has traj.jsonl with turn_idx and metrics.json).
-    检查样本是否已完整（是否包含 traj.jsonl 文件以及带有 turn_idx 和 metrics.json 的内容）
-
-    Args:
-        sample_dir: Sample directory path
-        args: Command line arguments
-        
-    Returns:
-        dict or None: Sample info dict if completed, None otherwise
+    Check whether a sample is complete and recover minimal result records.
+    Supports both single-rollout output and rollout_N subdirectories.
     """
     if not getattr(args, 'skip_completed', False):
         return None
-    
-    traj_file = os.path.join(sample_dir, 'traj.jsonl')
-    metrics_file = os.path.join(sample_dir, 'metrics.json')
-    
-    # 断点续跑：同时存在轨迹和指标文件才认为该样本已完成。
-    is_complete = False
-    if os.path.exists(traj_file) and os.path.exists(metrics_file):
+
+    def _load_completed_rollout(rollout_dir, rollout_idx=None):
+        traj_file = os.path.join(rollout_dir, 'traj.jsonl')
+        metrics_file = os.path.join(rollout_dir, 'metrics.json')
+        if not (os.path.exists(traj_file) and os.path.exists(metrics_file)):
+            return None
+
+        max_turn_idx = -1
+        has_turn = False
         try:
             with open(traj_file, 'r', encoding='utf-8') as f:
-                lines = [l for l in f if l.strip()]
-                # Check if there are any turn_idx entries
-                for line in lines:
+                for line in f:
+                    if not line.strip():
+                        continue
                     try:
                         traj_data = json.loads(line)
-                        if 'turn_idx' in traj_data and traj_data['turn_idx'] is not None:
-                            is_complete = True
-                            break
-                    except (json.JSONDecodeError, KeyError) as e:
+                    except json.JSONDecodeError as e:
                         logger.debug(f"Error parsing trajectory line: {e}")
-                        pass
+                        continue
+                    turn_idx = traj_data.get('turn_idx')
+                    if turn_idx is not None:
+                        has_turn = True
+                        if turn_idx > max_turn_idx:
+                            max_turn_idx = turn_idx
         except Exception as e:
             logger.debug(f"Error reading trajectory file: {e}")
-            pass
-    
-    if not is_complete:
-        return None
-    
-    # Try to load existing result
-    sample_rollout_results = []
-    try:
-        with open(metrics_file, 'r', encoding='utf-8') as f:
-            metrics = json.load(f)
-        
-        # 从轨迹中恢复 turn 数，保证汇总统计不失真。
-        num_turns = 0
+            return None
+
+        if not has_turn:
+            return None
+
         try:
-            with open(traj_file, 'r', encoding='utf-8') as f:
-                max_turn_idx = -1
-                for line in f:
-                    if line.strip():
-                        try:
-                            traj_data = json.loads(line)
-                            turn_idx = traj_data.get('turn_idx')
-                            if turn_idx is not None and turn_idx > max_turn_idx:
-                                max_turn_idx = turn_idx
-                        except (json.JSONDecodeError, KeyError) as e:
-                            logger.debug(f"Error parsing trajectory line: {e}")
-                            pass
-            num_turns = max_turn_idx + 1 if max_turn_idx >= 0 else 0
+            with open(metrics_file, 'r', encoding='utf-8') as f:
+                metrics = json.load(f)
         except Exception as e:
-            logger.debug(f"Error reading trajectory file for turn count: {e}")
-            pass
-        
-        # 构造最小 conversation_history，只用于后续统计 turn 数。
-        conversation_history = [{"role": "assistant", "content": ""} for _ in range(num_turns)] if num_turns > 0 else []
-        
-        # 返回与新跑样本一致的最小结果结构。
-        sample_rollout_results.append({
+            logger.debug(f"Error loading existing metrics: {e}")
+            return None
+
+        num_turns = max_turn_idx + 1 if max_turn_idx >= 0 else 0
+        result = {
             'question_id': os.path.basename(sample_dir),
             'accuracy_score': metrics.get('accuracy_score', 0.0),
-            'conversation_history': conversation_history,
-        })
-    except Exception as e:
-        logger.debug(f"Error loading existing metrics: {e}")
-        pass
-    
-    return {
-        'sample_rollout_results': sample_rollout_results
-    }
+            'conversation_history': [{"role": "assistant", "content": ""} for _ in range(num_turns)] if num_turns > 0 else [],
+        }
+        if rollout_idx is not None:
+            result['_rollout_idx'] = rollout_idx
+        return result
+
+    rollouts_per_sample = int(getattr(args, 'rollouts_per_sample', 1) or 1)
+    if rollouts_per_sample > 1:
+        if not os.path.exists(os.path.join(sample_dir, SAMPLE_SUMMARY_FILENAME)):
+            return None
+        sample_rollout_results = []
+        for rollout_idx in range(rollouts_per_sample):
+            result = _load_completed_rollout(os.path.join(sample_dir, f"rollout_{rollout_idx}"), rollout_idx)
+            if result is None:
+                return None
+            sample_rollout_results.append(result)
+        return {'sample_rollout_results': sample_rollout_results}
+
+    result = _load_completed_rollout(sample_dir)
+    if result is None:
+        return None
+    return {'sample_rollout_results': [result]}
 
 
 def prepare_sample_args(args):

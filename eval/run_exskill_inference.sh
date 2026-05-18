@@ -73,32 +73,37 @@ export ENABLE_FUNCTION_CALLING="true"
 # 可用工具：web_search、image_search、visit、code_interpreter、zoom
 # 如需启用图片搜索，可使用下面这一行
 # export ENABLED_TOOLS="web_search, image_search, visit, code_interpreter"
-export ENABLED_TOOLS="web_search, visit, code_interpreter"
+export ENABLED_TOOLS="${ENABLED_TOOLS:-web_search, visit, code_interpreter}"
 
 TOOL_CONFIG_PATH="eval/configs/tool_configs.yaml"
 
-IMAGE_SEARCH_MAX_CALLS=5
-WEB_SEARCH_MAX_CALLS=7
+IMAGE_SEARCH_MAX_CALLS="${IMAGE_SEARCH_MAX_CALLS:-5}"
+WEB_SEARCH_MAX_CALLS="${WEB_SEARCH_MAX_CALLS:-7}"
 
 # ============================================================================
 # 推理参数
 # ============================================================================
 
-MAX_TOTAL_TOKENS=32768
-MAX_TURNS=20
-MAX_IMAGES=100
-TEMPERATURE=0.6
-TOP_P=1.0
+MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-32768}"
+MAX_TURNS="${MAX_TURNS:-20}"
+MAX_IMAGES="${MAX_IMAGES:-100}"
+TEMPERATURE="${TEMPERATURE:-0.6}"
+TOP_P="${TOP_P:-1.0}"
 
 # ============================================================================
 # 经验库参数
 # ============================================================================
 
-EXPERIENCE_MAX_OPS=3
-EXPERIENCE_MAX_ITEMS=120
+EXPERIENCE_MAX_OPS="${EXPERIENCE_MAX_OPS:-3}"
+EXPERIENCE_MAX_ITEMS="${EXPERIENCE_MAX_ITEMS:-120}"
 
 # 经验检索参数
-EXPERIENCE_RETRIEVAL_TOP_K=3
+EXPERIENCE_RETRIEVAL_TOP_K="${EXPERIENCE_RETRIEVAL_TOP_K:-3}"
+SKILL_RETRIEVAL_TOP_K="${SKILL_RETRIEVAL_TOP_K:-3}"
+MEMORY_RERANK_TOP_SKILLS="${MEMORY_RERANK_TOP_SKILLS:-2}"
+MEMORY_RERANK_TOP_EXPERIENCES="${MEMORY_RERANK_TOP_EXPERIENCES:-8}"
+SKILL_CLUSTER_MIN_EXPERIENCES="${SKILL_CLUSTER_MIN_EXPERIENCES:-2}"
+SKILL_CLUSTER_MAX_CLUSTERS="${SKILL_CLUSTER_MAX_CLUSTERS:-16}"
 MEMORY_NAME="${MEMORY_NAME:-${BENCHMARK:-test}}"
 MEMORY_ROOT="${MEMORY_ROOT:-$DATA_ROOT/memory_bank/$MEMORY_NAME}"
 export MEMORY_NAME MEMORY_ROOT
@@ -109,14 +114,14 @@ EXPERIENCE_LIBRARY="${EXPERIENCE_LIBRARY:-$MEMORY_ROOT/experiences.json}"
 # ============================================================================
 
 SKILL_LIBRARY="${SKILL_LIBRARY:-$MEMORY_ROOT/SKILL.md}"
-SKILL_MAX_LENGTH=1000
+SKILL_MAX_LENGTH="${SKILL_MAX_LENGTH:-1000}"
 
 # ============================================================================
 # 运行设置
 # ============================================================================
 
 # SYSTEM_PROMPT_TYPE="multi_tool_agent_search"
-SYSTEM_PROMPT_TYPE="multi_tool_agent"
+SYSTEM_PROMPT_TYPE="${SYSTEM_PROMPT_TYPE:-multi_tool_agent}"
 # SYSTEM_PROMPT_TYPE="multi_tool_agent_code"
 # SYSTEM_PROMPT_TYPE="agent_zoom"
 # SYSTEM_PROMPT_TYPE="direct_cot"
@@ -168,6 +173,11 @@ python3 -u eval/infer_api.py \
     --experience-library $EXPERIENCE_LIBRARY \
     --experience-retrieval \
     --experience-retrieval-top-k $EXPERIENCE_RETRIEVAL_TOP_K \
+    --skill-retrieval-top-k $SKILL_RETRIEVAL_TOP_K \
+    --memory-rerank-top-skills $MEMORY_RERANK_TOP_SKILLS \
+    --memory-rerank-top-experiences $MEMORY_RERANK_TOP_EXPERIENCES \
+    --skill-cluster-min-experiences $SKILL_CLUSTER_MIN_EXPERIENCES \
+    --skill-cluster-max-clusters $SKILL_CLUSTER_MAX_CLUSTERS \
     --experience-retrieval-decomposition \
     --experience-retrieval-rewrite \
     2>&1 | tee $LOG_OUTPUT_DIR.log

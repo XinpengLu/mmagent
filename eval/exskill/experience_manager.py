@@ -17,7 +17,6 @@ from .experience_schema import (
     make_record_for_id,
     merge_record_metadata,
     normalize_experience_library,
-    reassign_experience_ids,
 )
 
 from prompts.experience_prompts import EXPERIENCE_REFINE_PROMPT, MERGE_PROMPT
@@ -39,12 +38,15 @@ TOP_K_SIMILARITY_SEARCH = 10  # Number of similar experiences to retrieve
 # --------- Helpers ---------
 def _strip_markdown_code_blocks(text: str) -> str:
     """Remove markdown code fence wrappers from LLM response text."""
-    # LLM 经常返回 ```markdown fenced block，这里只保留内部正文。
     if "```" not in text:
         return text.strip()
     parts = text.split("```")
-    if len(parts) > 2:
-        return parts[2].strip()
+    if len(parts) >= 3:
+        inner = parts[1]
+        first_newline = inner.find("\n")
+        if first_newline != -1:
+            inner = inner[first_newline + 1:]
+        return inner.strip()
     return (parts[0].strip() if parts else text).strip()
 
 
@@ -103,8 +105,12 @@ class ExperienceMemoryProvider:
         if not texts:
             return np.array([], dtype=np.float32)
 
-        retriever = self._get_retriever()
-        embeddings = retriever._generate_embeddings_batch(texts, batch_size=len(texts))
+        try:
+            retriever = self._get_retriever()
+            embeddings = retriever._generate_embeddings_batch(texts, batch_size=len(texts))
+        except Exception as e:
+            print(f"  - Warning: embedding unavailable for merge search: {e}")
+            return np.array([], dtype=np.float32)
         # 过滤生成失败的 embedding，再堆成矩阵。
         valid_embeddings = [e for e in embeddings if e is not None]
         if not valid_embeddings:
@@ -411,11 +417,8 @@ def batch_merge(
             provider.modify_experience(modified_from, new_record)
             print(f"    - Modified {modified_from}")
 
-    # Step 4: 取出最终经验库并重新编号。
-    final_experiences_dict = provider.to_dict()
-
-    # 重新编号为连续的 E0, E1, ...，避免删除/合并后 ID 空洞。
-    final_experiences = reassign_experience_ids(final_experiences_dict)
+    # Step 4: keep stable IDs so skill -> experience links remain valid.
+    final_experiences = normalize_experience_library(provider.to_dict())
 
     print(f"  - Final library size: {len(final_experiences)} experiences")
 
@@ -523,7 +526,7 @@ def _reduce_experiences_to_limit(
                         provider.remove_experience(exp_id1)
                         provider.remove_experience(exp_id2)
 
-                        # 新 ID 放在当前最大 ID 之后，后面会统一重编号。
+                        # New IDs stay after the current max ID. Holes are allowed.
                         new_id = f"E{_max_exp_id(current) + 1}"
                         merged_record = merge_record_metadata(new_id, [current[exp_id1], current[exp_id2]], merged_text)
                         provider.add_experience(new_id, merged_record)
@@ -556,7 +559,7 @@ def _reduce_experiences_to_limit(
             traceback.print_exc()
             break
 
-    return reassign_experience_ids(current)
+    return normalize_experience_library(current)
 
 
 def refine_experience_library(
@@ -683,8 +686,8 @@ def refine_experience_library(
                 delete_count += 1
                 print(f"    - Deleted {deleted_id}")
 
-    # 最终再重编号，保持经验 ID 连续。
-    final = reassign_experience_ids(refined)
+    # Keep stable IDs; holes are safer than invalidating skill links.
+    final = normalize_experience_library(refined)
 
     print(f"  [Refine] Complete: {len(experiences)} -> {len(final)} ({merge_count} merges, {delete_count} deletes)")
 

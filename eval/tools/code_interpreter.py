@@ -357,15 +357,17 @@ Pre-installed packages:
         # Merge image loading code with user code
         full_code = image_load_code + code
 
-        # Safety check
-        if 'exit' in code.lower():
-            return 'Error: Using exit() is not allowed'
-        
         # Syntax check
         try:
-            ast.parse(code)
+            tree = ast.parse(code)
         except SyntaxError as e:
             return f'SyntaxError: {e}'
+
+        # Safety check: block actual exit()/quit() calls, not substrings
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                if node.func.id in ('exit', 'quit'):
+                    return 'Error: Using exit() is not allowed'
         
         # After saving input images, record file list before execution (to detect newly generated images)
         # This excludes input images and previously preserved user-saved files
@@ -818,6 +820,8 @@ Pre-installed packages:
         if is_output_timeout:
             print(f"[CodeInterpreter] Skipping image scan due to output timeout, returning immediately")
             return result.lstrip('\n')
+
+        self._capture_pil_variables(kc, code)
         
         # After code execution, scan work directory to find newly generated image files
         # Since each instance has a separate work directory, just compare file names
@@ -846,6 +850,66 @@ Pre-installed packages:
                 print(f"[CodeInterpreter] Auto-detected saved image: {img_file} -> {abs_image_path}")
         
         return result.lstrip('\n')
+
+    def _capture_pil_variables(self, kc, code: str = "") -> None:
+        """Save user-created PIL images from the kernel so visual validation artifacts are visible."""
+        prefix = uuid.uuid4().hex[:8]
+        work_dir = os.path.abspath(self.work_dir)
+        assigned_names = sorted(set(re.findall(r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=", code or "")))
+        max_auto_capture = int(os.environ.get("CODE_INTERPRETER_MAX_AUTO_CAPTURE_IMAGES", "3") or 3)
+        post_code = f"""import json as _xskill_json
+import os as _xskill_os
+import re as _xskill_re
+try:
+    from PIL import Image as _xskill_pil_image
+    _xskill_dir = {work_dir!r}
+    _xskill_prefix = {prefix!r}
+    _xskill_assigned = {assigned_names!r}
+    _xskill_max = {max_auto_capture!r}
+    _xskill_excluded = {{'image', 'original_image'}}
+    _xskill_preferred = ('overlay', 'bbox', 'box', 'mask', 'crop', 'annot', 'plot', 'visual', 'vis', 'result', 'processed', 'binary', 'binarized', 'threshold', 'rotated', 'enlarged', 'region')
+    _xskill_saved = []
+    _xskill_candidates = []
+    for _xskill_name, _xskill_value in list(globals().items()):
+        if not isinstance(_xskill_name, str):
+            continue
+        if _xskill_name.startswith('_') or _xskill_name in _xskill_excluded:
+            continue
+        if _xskill_name.startswith(('original_image', 'tool_image_', 'observation_')):
+            continue
+        if isinstance(_xskill_value, _xskill_pil_image.Image):
+            if _xskill_assigned and _xskill_name not in _xskill_assigned:
+                continue
+            _xskill_score = 0
+            _xskill_lower = _xskill_name.lower()
+            if any(_term in _xskill_lower for _term in _xskill_preferred):
+                _xskill_score += 2
+            if _xskill_name in _xskill_assigned:
+                _xskill_score += 1
+            _xskill_candidates.append((_xskill_score, _xskill_name, _xskill_value))
+    _xskill_candidates.sort(key=lambda _item: (-_item[0], _item[1]))
+    for _, _xskill_name, _xskill_value in _xskill_candidates[:max(0, _xskill_max)]:
+        _xskill_safe = _xskill_re.sub(r'[^a-zA-Z0-9_]+', '_', _xskill_name).strip('_') or 'image'
+        _xskill_path = _xskill_os.path.join(_xskill_dir, f'auto_capture_{{_xskill_prefix}}_{{_xskill_safe}}.png')
+        _xskill_value.save(_xskill_path)
+        _xskill_saved.append(_xskill_path)
+    if _xskill_saved:
+        print('__XSKILL_CAPTURED_IMAGES__=' + _xskill_json.dumps(_xskill_saved))
+except Exception as _xskill_exc:
+    print('__XSKILL_CAPTURE_ERROR__=' + repr(_xskill_exc))
+"""
+        try:
+            kc.execute(post_code)
+            start = time.time()
+            while time.time() - start < 5:
+                try:
+                    msg = kc.get_iopub_msg(timeout=1)
+                except queue.Empty:
+                    continue
+                if msg.get('msg_type') == 'status' and msg.get('content', {}).get('execution_state') == 'idle':
+                    break
+        except Exception as e:
+            print(f"[CodeInterpreter] Warning: failed to auto-capture PIL variables: {e}")
     
     def _serve_image(self, image_base64: str) -> str:
         """Save image and return path"""

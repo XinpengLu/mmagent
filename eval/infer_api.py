@@ -3,7 +3,6 @@
 import argparse
 import os
 import json
-import threading
 import time
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -22,9 +21,66 @@ from exskill import (
     save_library as exp_save_library,
     refine_experience_library,
     cluster_experiences_to_skills,
+    compact_experience_operation,
     normalize_experience_operation,
     update_memory_usage_after_sample,
 )
+from exskill.experience_utils import EXPERIENCE_LIBRARY_LOCK
+
+
+def _operation_kind(operation):
+    """Return the explicit kind on an LLM-produced experience operation, if any."""
+    if not isinstance(operation, dict):
+        return None
+    payload = operation.get("experience")
+    if isinstance(payload, dict):
+        value = payload.get("kind") or payload.get("outcome")
+    else:
+        value = operation.get("kind") or operation.get("outcome")
+    return str(value).strip().lower() if value is not None else None
+
+
+_UNSUPPORTED_MEMORY_TERMS = (
+    "ocr",
+    "handwriting-specific",
+    "object detection",
+    "detector",
+    "segmentation",
+    "bfs",
+    "a*",
+    "astar",
+    "dijkstra",
+)
+
+
+def _text_has_unsupported_memory_term(text, support_text):
+    text_lower = str(text or "").lower()
+    support_lower = str(support_text or "").lower()
+    return any(term in text_lower and term not in support_lower for term in _UNSUPPORTED_MEMORY_TERMS)
+
+
+def _sanitize_evidence_bounded_operation(operation, support_text):
+    """Remove unsupported named methods from LLM-produced memory operations."""
+    if not isinstance(operation, dict):
+        return operation
+    op = dict(operation)
+    payload = op.get("experience")
+    target = dict(payload) if isinstance(payload, dict) else op
+
+    content = target.get("content") or target.get("experience") or target.get("text")
+    if _text_has_unsupported_memory_term(content, support_text):
+        target["content"] = (
+            "When a visual extraction attempt fails, use only available tools and "
+            "validated intermediate evidence; do not assume unavailable specialized tools or methods."
+        )
+
+    if isinstance(payload, dict):
+        op["experience"] = target
+    else:
+        op.update(target)
+    return op
+
+
 
 # 单样本 agent 执行入口
 from engine.api_processors import process_single_sample, set_global_prompts as set_processors_prompts
@@ -65,10 +121,6 @@ def run_single_rollout(sample, args, sampling_params, rollout_idx):
 
     # 每个 rollout 使用独立 args 副本，避免并行时互相覆盖 output_dir 等状态。
     rollout_args = prepare_sample_args(args)
-
-    # 应用本样本专属 prompt，其中可能包含检索到的经验和适配后的技能。
-    if hasattr(args, '_sample_system_prompt'):
-        set_processors_prompts(args._sample_system_prompt)
 
     # 每个 rollout 使用不同随机种子，便于 pass@k 统计。
     seed = args.seed_base + rollout_idx
@@ -215,8 +267,12 @@ def generate_experience_for_sample(sample_info, args):
                 "success": bool(score == 1.0),
                 "final_answer": rollout_result.get("final_answer"),
             })
-        has_success = any(float(score) == 1.0 for score in score_list)
-        default_kind = "success" if has_success else "failure"
+        success_count = sum(1 for score in score_list if float(score) == 1.0)
+        total_rollouts = max(1, len(score_list))
+        has_success = success_count > 0
+        reliable_success = success_count > (total_rollouts / 2)
+        default_kind = "success" if reliable_success else "failure"
+        all_rollouts_failed = not has_success
         source = {
             "doc_id": question_id,
             "task": sample_info.get("sample", {}).get("task"),
@@ -239,18 +295,38 @@ def generate_experience_for_sample(sample_info, args):
             raw_iter = [raw_ops]
         else:
             raw_iter = []
+        support_text = json.dumps(
+            {
+                "question": question,
+                "summaries": summaries_only,
+                "used_experiences": used_experiences,
+            },
+            ensure_ascii=False,
+        )
 
         for op in raw_iter:
             if isinstance(op, str):
                 op = {"experience": op}
             elif isinstance(op, dict):
-                op = dict(op)
+                op = _sanitize_evidence_bounded_operation(op, support_text)
                 if not op.get("task_tags") and sample_info.get("sample", {}).get("task"):
                     op["task_tags"] = [sample_info["sample"]["task"]]
+                if _operation_kind(op) == "success" and not has_success:
+                    print(
+                        f"  [Experience] Dropping success memory for {question_id} "
+                        f"because no rollout was successful"
+                    )
+                    continue
+                if all_rollouts_failed:
+                    op["kind"] = "failure"
+                    if op.get("confidence") is not None:
+                        try:
+                            op["confidence"] = min(float(op["confidence"]), 0.65)
+                        except (TypeError, ValueError):
+                            op["confidence"] = 0.6
             normalized = normalize_experience_operation(
                 op,
                 default_kind=default_kind,
-                source=source,
             )
             if normalized:
                 norm_ops.append(normalized)
@@ -258,7 +334,7 @@ def generate_experience_for_sample(sample_info, args):
         # 保存样本级经验，便于调试和复盘。
         if norm_ops:
             with open(os.path.join(sample_dir, 'exp_items.json'), 'w', encoding='utf-8') as f:
-                json.dump(norm_ops, f, ensure_ascii=False, indent=2)
+                json.dump([compact_experience_operation(op) for op in norm_ops], f, ensure_ascii=False, indent=2)
 
         # 多 skill 版本不再按单样本直接生成 skill。
         # skill 会在 batch 级别由 experience 聚类后统一生成，并回写 skill_ids。
@@ -329,11 +405,29 @@ def save_knowledge_snapshot(args, batch_idx):
     else:
         metadata["skill_word_count"] = 0
 
+    metadata["skill_count"] = 0
+    if getattr(args, 'skill_library', None):
+        skill_root = os.path.dirname(args.skill_library)
+        skill_index_src = os.path.join(skill_root, "skill_index.json")
+        if os.path.exists(skill_index_src):
+            skill_index_dst = os.path.join(snapshot_dir, "skill_index.json")
+            shutil.copy2(skill_index_src, skill_index_dst)
+            try:
+                with open(skill_index_dst, 'r', encoding='utf-8') as f:
+                    skill_index = json.load(f)
+                metadata["skill_count"] = len(skill_index.get("skills", {}))
+            except Exception:
+                metadata["skill_count"] = -1
+
+        skills_src = os.path.join(skill_root, "skills")
+        if os.path.isdir(skills_src):
+            shutil.copytree(skills_src, os.path.join(snapshot_dir, "skills"), dirs_exist_ok=True)
+
     # 保存快照元信息。
     with open(os.path.join(snapshot_dir, "metadata.json"), 'w', encoding='utf-8') as f:
         json.dump(metadata, f, ensure_ascii=False, indent=2)
 
-    print(f"  [Snapshot] Saved batch_{batch_idx:03d} snapshot (exp: {metadata['experience_count']}, skill: {metadata['skill_word_count']} words)")
+    print(f"  [Snapshot] Saved batch_{batch_idx:03d} snapshot (exp: {metadata['experience_count']}, skills: {metadata['skill_count']})")
 
 
 # Phase I 的知识合并部分：批量生成经验、合并经验库、合并 skill 文档，并按需 refine。
@@ -368,7 +462,12 @@ def process_large_batch_experiences(samples_info, args, batch_idx=0, is_final=Fa
     gen_start = time.time()
     # 技能生成放在单样本任务内部执行，避免并行写同一个 SKILL.md。
     num_tasks = len(samples_info)
-    with ThreadPoolExecutor(max_workers=num_tasks) as executor:
+    generation_workers = getattr(args, 'experience_generation_workers', None)
+    if generation_workers is None or generation_workers <= 0:
+        generation_workers = getattr(args, 'num_workers', 4) or 4
+    generation_workers = max(1, min(num_tasks, int(generation_workers), 16))
+    print(f"  [Large Batch] Experience generation workers: {generation_workers}/{num_tasks}")
+    with ThreadPoolExecutor(max_workers=generation_workers) as executor:
         exp_futures = {
             executor.submit(generate_experience_for_sample, sample_info, args): sample_info
             for sample_info in samples_info
@@ -391,10 +490,7 @@ def process_large_batch_experiences(samples_info, args, batch_idx=0, is_final=Fa
     # 将本批次的新经验合并进全局经验库。
     if all_experience_ops and getattr(args, 'experience_library_update', False) and args.experience_library:
         try:
-            if not hasattr(process_large_batch_experiences, '_library_lock'):
-                process_large_batch_experiences._library_lock = threading.Lock()
-
-            with process_large_batch_experiences._library_lock:
+            with EXPERIENCE_LIBRARY_LOCK:
                 existing = exp_load_existing(args.experience_library)
                 merge_start = time.time()
                 merged = exp_batch_merge(
@@ -531,16 +627,24 @@ def main(args):
     sampling_params = {
         "temperature": args.temperature,
         "top_p": args.top_p,
-        "max_tokens": args.max_completion_tokens,  # Configurable (default: 16384)
+        "max_tokens": args.max_completion_tokens,
     }
+    if args.max_total_tokens <= args.max_completion_tokens:
+        adjusted_total = args.max_completion_tokens + 4096
+        print(
+            f"Warning: max_total_tokens ({args.max_total_tokens}) must be larger than "
+            f"max_completion_tokens ({args.max_completion_tokens}); using {adjusted_total}."
+        )
+        args.max_total_tokens = adjusted_total
 
     # 初始化经验检索器；若未启用检索，也可能退化为全量经验注入。
     # 对应 Phase II: Decomposition/Retrieval 的初始化。
     experience_retriever, experience_injection_text = initialize_experience_retriever(args)
+    current_system_prompt = BASE_SYSTEM_PROMPT
     if experience_injection_text:
         # Traditional mode: inject all experiences (or up to max_items)
-        SYSTEM_PROMPT = (experience_injection_text + "\n\n" + BASE_SYSTEM_PROMPT) if BASE_SYSTEM_PROMPT else experience_injection_text
-        set_processors_prompts(SYSTEM_PROMPT)
+        current_system_prompt = (experience_injection_text + "\n\n" + BASE_SYSTEM_PROMPT) if BASE_SYSTEM_PROMPT else experience_injection_text
+        set_processors_prompts(current_system_prompt)
 
     all_results = []
 
@@ -558,9 +662,9 @@ def main(args):
         os.makedirs(sample_dir, exist_ok=True)
 
         retrieve_experiences_for_sample(
-            sample, sample_args, experience_retriever, BASE_SYSTEM_PROMPT,
+            sample, sample_args, experience_retriever, current_system_prompt,
             question_id, sample_dir,
-            update_global_prompts=True
+            update_global_prompts=False
         )
 
         # 如果开启断点续跑且样本已完成，则直接复用已有结果。
@@ -606,16 +710,13 @@ def main(args):
 
         if sample_rollout_results:
             # 推理结束后记录本题使用过的 skill/experience，并在失败时生成 failure experience。
-            if not hasattr(process_single_sample_with_experience, '_memory_usage_lock'):
-                process_single_sample_with_experience._memory_usage_lock = threading.Lock()
-            with process_single_sample_with_experience._memory_usage_lock:
-                update_memory_usage_after_sample(
-                    getattr(sample_args, 'experience_library', None),
-                    getattr(sample_args, 'skill_library', None),
-                    sample_dir,
-                    sample,
-                    sample_rollout_results,
-                )
+            update_memory_usage_after_sample(
+                getattr(sample_args, 'experience_library', None),
+                getattr(sample_args, 'skill_library', None),
+                sample_dir,
+                sample,
+                sample_rollout_results,
+            )
 
         # 返回样本执行信息；经验生成在大批次层统一触发。
         return {
@@ -631,7 +732,7 @@ def main(args):
         print(f"  Rollouts per sample: {args.rollouts_per_sample}")
 
         if use_experience_batching:
-            max_concurrent_samples = args.num_workers // args.rollouts_per_sample
+            max_concurrent_samples = max(1, args.num_workers // args.rollouts_per_sample)
             print(f"  Max concurrent samples per batch: {max_concurrent_samples} (limited by {args.num_workers} workers)")
 
             # 并行 pipeline 模式：按批提交样本和 rollout，兼顾吞吐与经验更新节奏。
@@ -663,7 +764,7 @@ def main(args):
                     sample_results_dict=batch_sample_results,
                     args=args,
                     experience_retriever=experience_retriever,
-                    base_system_prompt=BASE_SYSTEM_PROMPT,
+                    base_system_prompt=current_system_prompt,
                     sampling_params=sampling_params,
                     run_single_rollout_func=run_single_rollout,
                     progress_desc=f"Batch {sample_idx // batch_size + 1}",
@@ -692,7 +793,7 @@ def main(args):
                     process_large_batch_experiences(large_batch_queue, args, batch_idx=large_batch_idx)
                     large_batch_idx += 1
                     large_batch_queue.clear()
-                    SYSTEM_PROMPT = reload_experiences(args, BASE_SYSTEM_PROMPT, experience_retriever)
+                    current_system_prompt = reload_experiences(args, BASE_SYSTEM_PROMPT, experience_retriever)
                 sample_idx += batch_size
         else:
             # 不做在线经验更新时，尽量一次性提交所有 rollout 提高利用率。
@@ -719,7 +820,7 @@ def main(args):
                 sample_results_dict=sample_results,
                 args=args,
                 experience_retriever=experience_retriever,
-                base_system_prompt=BASE_SYSTEM_PROMPT,
+                base_system_prompt=current_system_prompt,
                 sampling_params=sampling_params,
                 run_single_rollout_func=run_single_rollout,
                 progress_desc="Processing rollouts",
@@ -770,7 +871,7 @@ def main(args):
                         process_large_batch_experiences(large_batch_queue, args, batch_idx=large_batch_idx)
                         large_batch_idx += 1
                         large_batch_queue.clear()
-                        SYSTEM_PROMPT = reload_experiences(args, BASE_SYSTEM_PROMPT, experience_retriever)
+                        current_system_prompt = reload_experiences(args, BASE_SYSTEM_PROMPT, experience_retriever)
                 sample_idx += actual_batch_size
             if use_experience_batching and large_batch_queue:
                 print(f"\n[Final Batch] Processing remaining {len(large_batch_queue)} samples...")
@@ -808,7 +909,7 @@ def main(args):
                         large_batch_idx += 1
                         large_batch_queue.clear()
                         # 经验库更新后刷新注入内容/检索缓存。
-                        SYSTEM_PROMPT = reload_experiences(args, BASE_SYSTEM_PROMPT, experience_retriever)
+                        current_system_prompt = reload_experiences(args, BASE_SYSTEM_PROMPT, experience_retriever)
 
     # 处理未达到大批次阈值的剩余样本。
     if use_experience_batching and large_batch_queue:
@@ -846,7 +947,7 @@ if __name__ == "__main__":
     # 推理控制参数
     parser.add_argument("--max-turns", type=int, default=16, help="Maximum number of turns for inference.")
     parser.add_argument("--max-images", type=int, default=16, help="Maximum number of images per sample.")
-    parser.add_argument("--max-total-tokens", type=int, default=8000, help="Maximum total tokens for context.")
+    parser.add_argument("--max-total-tokens", type=int, default=32768, help="Maximum total tokens for context.")
     parser.add_argument("--max-pixels", type=int, default=2000000, help="Maximum pixels for image processing.")
     parser.add_argument("--min-pixels", type=int, default=40000, help="Minimum pixels for image processing.")
     parser.add_argument("--num-workers", type=int, default=4, help="Number of workers for parallel processing.")
@@ -888,6 +989,8 @@ if __name__ == "__main__":
                         help="Max number of experiences to inject/keep in library")
     parser.add_argument("--experience-refine", action='store_true',
                        help="Enable experience library refinement after merge (uses --experience-max-items as threshold)")
+    parser.add_argument("--experience-generation-workers", type=int, default=None,
+                       help="Maximum workers for parallel experience generation inside each large batch")
 
     # 技能生成/注入参数
     parser.add_argument("--skill-enable", action='store_true',
@@ -904,12 +1007,16 @@ if __name__ == "__main__":
                        help="Word count threshold to trigger skill refinement (default: 1000)")
     parser.add_argument("--skill-cluster-max-clusters", type=int, default=16,
                        help="Maximum number of modular skill clusters to update per experience batch")
-    parser.add_argument("--skill-cluster-min-experiences", type=int, default=1,
+    parser.add_argument("--skill-cluster-min-experiences", type=int, default=2,
                        help="Minimum number of experiences required to form a skill cluster")
-    parser.add_argument("--skill-selection-top-k", type=int, default=2,
-                       help="Number of modular skills selected for each inference sample")
-    parser.add_argument("--skill-linked-experience-max-items", type=int, default=8,
-                       help="Maximum number of direct+linked experiences injected after skill selection")
+    parser.add_argument("--skill-retrieval-top-k", type=int, default=3,
+                       help="Number of modular skills retrieved per query/subtask by embedding")
+    parser.add_argument("--skill-retrieval-min-similarity", type=float, default=0.0,
+                       help="Minimum embedding similarity for modular skill retrieval")
+    parser.add_argument("--memory-rerank-top-skills", type=int, default=2,
+                       help="Maximum number of retrieved skills kept after LLM rerank")
+    parser.add_argument("--memory-rerank-top-experiences", type=int, default=8,
+                       help="Maximum number of direct+linked experiences kept after LLM rerank")
 
     # 经验检索参数
     parser.add_argument("--experience-retrieval", action='store_true',

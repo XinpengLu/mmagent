@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
+import yaml
 
 from prompts.skill_prompts import GENERATE_CLUSTER_SKILL_PROMPT
 
@@ -24,6 +25,29 @@ from .experience_schema import (
 
 
 SkillIndex = Dict[str, Any]
+
+
+def _load_memory_prompt(prompt_key: str = "memory_rerank") -> str:
+    """Load memory prompts from YAML so prompt text is not embedded in code."""
+    prompt_path = Path(
+        os.environ.get("MEMORY_PROMPTS_PATH", "eval/prompts/memory_prompts.yaml")
+    )
+    try:
+        with prompt_path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        prompt = data.get(prompt_key)
+        if isinstance(prompt, str) and prompt.strip():
+            return prompt
+    except Exception as e:
+        print(f"  [Memory Prompt] Warning: failed to load {prompt_path}: {e}")
+
+    # Minimal fallback keeps runs alive if the external prompt file is missing.
+    return (
+        "Select directly useful memory for the task.\n"
+        "Task:\n{query}\n\nSkills:\n{skills}\n\nExperiences:\n{experiences}\n\n"
+        "Return JSON with skill_ids, experience_ids, and notes. "
+        "Use at most {max_skills} skills and {max_experiences} experiences."
+    )
 
 
 def _slugify(parts: Iterable[str], fallback: str = "general") -> str:
@@ -63,15 +87,38 @@ def load_skill_index(skill_library_path: Optional[str]) -> SkillIndex:
 def save_skill_index(skill_library_path: str, index: SkillIndex) -> None:
     path = skill_index_path(skill_library_path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    compact_index = {"schema_version": index.get("schema_version", 1), "skills": {}}
+    for skill_id, item in (index.get("skills", {}) or {}).items():
+        if not isinstance(item, dict):
+            continue
+        compact_item = {}
+        for key in (
+            "skill_id",
+            "path",
+            "task_tags",
+            "tool_tags",
+            "linked_experience_ids",
+            "trigger_text",
+            "updated_at",
+        ):
+            value = item.get(key)
+            if value not in (None, "", [], {}):
+                compact_item[key] = value
+        compact_index["skills"][skill_id] = compact_item
     with path.open("w", encoding="utf-8") as f:
-        json.dump(index, f, ensure_ascii=False, indent=2)
+        json.dump(compact_index, f, ensure_ascii=False, indent=2)
 
 
-def _record_signature(record: Dict[str, Any]) -> Tuple[str, Tuple[str, ...], Tuple[str, ...]]:
+def _record_signature(record: Dict[str, Any]) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
     task_tags = tuple(sorted(record.get("task_tags", []) or ["general"]))
     tool_tags = tuple(sorted(record.get("tool_tags", []) or ["reasoning"]))
-    kind = record.get("kind", "success")
-    return kind, task_tags, tool_tags
+    return task_tags, tool_tags
+
+
+def _exp_sort_key(exp_id: str) -> Tuple[int, str]:
+    if isinstance(exp_id, str) and exp_id.startswith("E") and exp_id[1:].isdigit():
+        return int(exp_id[1:]), exp_id
+    return 10**9, str(exp_id)
 
 
 def _try_content_embeddings(records: List[Dict[str, Any]]) -> Optional[np.ndarray]:
@@ -99,39 +146,57 @@ def _try_content_embeddings(records: List[Dict[str, Any]]) -> Optional[np.ndarra
     return None
 
 
+def _majority_tags(records: List[Dict[str, Any]], key: str) -> List[str]:
+    """Return the most common tags across cluster members."""
+    from collections import Counter
+    counter: Counter = Counter()
+    for record in records:
+        for tag in record.get(key, []):
+            counter[tag] += 1
+    if not counter:
+        return ["general"] if key == "task_tags" else ["reasoning"]
+    threshold = len(records) * 0.3
+    return sorted(tag for tag, cnt in counter.items() if cnt >= threshold) or [counter.most_common(1)[0][0]]
+
+
 def _cluster_by_tags_and_content(
     experiences: ExperienceLibrary,
     similarity_threshold: float = 0.74,
 ) -> List[Dict[str, Any]]:
+    """Cluster experiences by embedding similarity (embedding-first), with tag-based fallback."""
     normalized = normalize_experience_library(experiences)
-    groups: Dict[Tuple[str, Tuple[str, ...], Tuple[str, ...]], List[Tuple[str, Dict[str, Any]]]] = {}
-    for exp_id, record in normalized.items():
-        groups.setdefault(_record_signature(record), []).append((exp_id, record))
+    items = sorted(normalized.items(), key=lambda x: _exp_sort_key(x[0]))
+    if not items:
+        return []
 
+    records = [record for _, record in items]
+    embeddings = _try_content_embeddings(records)
+
+    if embeddings is None:
+        groups: Dict[Tuple[Tuple[str, ...], Tuple[str, ...]], List[Tuple[str, Dict[str, Any]]]] = {}
+        for exp_id, record in items:
+            groups.setdefault(_record_signature(record), []).append((exp_id, record))
+        return [{"signature": sig, "items": group_items} for sig, group_items in groups.items()]
+
+    similarities = _cosine_similarity_matrix(embeddings)
+    assigned = [False] * len(items)
     clusters = []
-    for signature, items in groups.items():
-        if len(items) <= 1:
-            clusters.append({"signature": signature, "items": items})
+    for i in range(len(items)):
+        if assigned[i]:
             continue
-
-        records = [record for _, record in items]
-        embeddings = _try_content_embeddings(records)
-        if embeddings is None:
-            clusters.append({"signature": signature, "items": items})
-            continue
-
-        assigned = [False] * len(items)
-        similarities = _cosine_similarity_matrix(embeddings)
-        for i, item in enumerate(items):
-            if assigned[i]:
-                continue
-            cluster_items = [item]
-            assigned[i] = True
-            for j in range(i + 1, len(items)):
-                if not assigned[j] and similarities[i][j] >= similarity_threshold:
-                    cluster_items.append(items[j])
-                    assigned[j] = True
-            clusters.append({"signature": signature, "items": cluster_items})
+        cluster_items = [items[i]]
+        assigned[i] = True
+        for j in range(i + 1, len(items)):
+            if not assigned[j] and similarities[i][j] >= similarity_threshold:
+                cluster_items.append(items[j])
+                assigned[j] = True
+        cluster_records = [r for _, r in cluster_items]
+        task_tags = tuple(_majority_tags(cluster_records, "task_tags"))
+        tool_tags = tuple(_majority_tags(cluster_records, "tool_tags"))
+        clusters.append({
+            "signature": (task_tags, tool_tags),
+            "items": cluster_items,
+        })
     return clusters
 
 
@@ -143,9 +208,10 @@ def _cosine_similarity_matrix(embeddings: np.ndarray) -> np.ndarray:
 
 
 def _cluster_skill_id(cluster: Dict[str, Any]) -> str:
-    _, task_tags, tool_tags = cluster["signature"]
-    exp_ids = [exp_id for exp_id, _ in cluster["items"]]
-    digest_input = "|".join(list(task_tags) + list(tool_tags) + exp_ids)
+    task_tags, tool_tags = cluster["signature"]
+    exp_ids = sorted([exp_id for exp_id, _ in cluster["items"]], key=_exp_sort_key)
+    representative = exp_ids[0] if exp_ids else "empty"
+    digest_input = "|".join(list(task_tags) + list(tool_tags) + [representative])
     digest = hashlib.sha1(digest_input.encode("utf-8")).hexdigest()[:8]
     return f"skill_{_slugify(task_tags)}_{_slugify(tool_tags)}_{digest}"
 
@@ -180,11 +246,57 @@ def _read_rollout_evidence(records: List[Dict[str, Any]], max_rollouts: int = 4,
     return "\n\n".join(chunks) or "(No rollout evidence available.)"
 
 
+_EVIDENCE_BOUNDED_TERMS = (
+    "object detection",
+    "detector",
+    "ocr",
+    "segmentation",
+    "bfs",
+    "a*",
+    "astar",
+    "dijkstra",
+)
+
+
+def _sanitize_evidence_bounded_skill(skill_content: str, support_text: str) -> str:
+    """Remove named methods that the LLM introduced without supporting evidence."""
+    if not skill_content:
+        return skill_content
+    support_lower = (support_text or "").lower()
+    lines = []
+    replaced = False
+    replacement_cache = set()
+
+    for line in skill_content.splitlines():
+        line_lower = line.lower()
+        unsupported = [
+            term for term in _EVIDENCE_BOUNDED_TERMS
+            if term in line_lower and term not in support_lower
+        ]
+        if unsupported:
+            prefix_match = re.match(r"^(\s*(?:[-*]\s*)?)", line)
+            prefix = prefix_match.group(1) if prefix_match else ""
+            replacement = (
+                prefix
+                + "Use only extraction or validation steps supported by the linked experiences; "
+                + "keep unsupported methods as placeholders."
+            )
+            if replacement not in replacement_cache:
+                lines.append(replacement)
+                replacement_cache.add(replacement)
+            replaced = True
+        else:
+            lines.append(line)
+
+    if replaced:
+        print("  [Skill Cluster] Sanitized unsupported named methods from generated skill.")
+    return "\n".join(lines).strip()
+
+
 def _fallback_skill_content(skill_id: str, records: List[Dict[str, Any]], metadata: Dict[str, Any]) -> str:
     linked = metadata.get("linked_experience_ids", [])
     task_tags = metadata.get("task_tags", [])
     tool_tags = metadata.get("tool_tags", [])
-    visual_tags = metadata.get("visual_tags", [])
     experience_lines = "\n".join(
         f"- {format_experience_for_prompt(record.get('id', f'E{i}'), record)}"
         for i, record in enumerate(records)
@@ -196,22 +308,61 @@ description: |
 version: 1.0.0
 task_tags: {task_tags}
 tool_tags: {tool_tags}
-visual_tags: {visual_tags}
 linked_experience_ids: {linked}
 ---
 
 # {skill_id}
 
 ## When to Use
-Use this skill when the task matches task tags `{task_tags}` or visual tags `{visual_tags}`.
+Use this skill when the task matches task tags `{task_tags}` or tool tags `{tool_tags}`.
 
 ## Workflow
 1. Inspect the target visual state and identify whether a tool-backed check is needed.
-2. Follow the linked experiences below as concrete constraints.
-3. If the task is ambiguous, use the tagged tools `{tool_tags}` before answering.
+2. Derive any grid, table, bounding box, coordinate, recognized text, object list, or option state from the current image and exact problem text before using it.
+3. Follow the linked experiences below as concrete constraints.
+4. If the task is ambiguous, use the tagged tools `{tool_tags}` before answering.
+
+## Failure Checks
+- Do not hand-write task-specific visual structures from memory or from a previous case.
+- Treat a tool result as invalid if its structured input was not derived from the current image/problem text.
 
 ## Linked Experiences
 {experience_lines}
+"""
+
+
+def _failure_guardrail_skill_content(skill_id: str, records: List[Dict[str, Any]], metadata: Dict[str, Any]) -> str:
+    """For all-failure clusters, create guardrails instead of inventing a workflow."""
+    linked = metadata.get("linked_experience_ids", [])
+    task_tags = metadata.get("task_tags", [])
+    tool_tags = metadata.get("tool_tags", [])
+    experience_lines = []
+    for i, record in enumerate(records):
+        exp_id = record.get("id") or (linked[i] if i < len(linked) else f"E{i}")
+        experience_lines.append(f"- [{exp_id}] {record.get('content', '')}")
+    return f"""---
+name: {skill_id}
+description: |
+  Failure guardrail skill for avoiding repeated errors in {', '.join(task_tags) or 'similar'} tasks.
+version: 1.0.0
+task_tags: {task_tags}
+tool_tags: {tool_tags}
+linked_experience_ids: {linked}
+---
+
+# Failure Guardrails
+
+## When to Use
+- Use only when the task matches these tags: `{task_tags}`.
+- This skill is not a recipe. It records failure patterns to avoid.
+
+## Guardrails
+{os.linesep.join(experience_lines)}
+
+## How to Apply
+1. Check whether your planned step matches one of the failure conditions.
+2. If it matches, revise that step before executing it.
+3. Do not introduce new algorithms, tools, coordinates, object lists, or constants that are not supported by the current image/problem text.
 """
 
 
@@ -234,40 +385,37 @@ def cluster_experiences_to_skills(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     max_clusters = int(getattr(args, "skill_cluster_max_clusters", 16) or 16)
-    min_exps = int(getattr(args, "skill_cluster_min_experiences", 1) or 1)
+    min_exps = int(getattr(args, "skill_cluster_min_experiences", 2) or 2)
     clusters = _cluster_by_tags_and_content(normalized)
     clusters = [cluster for cluster in clusters if len(cluster["items"]) >= min_exps]
     clusters.sort(key=lambda c: (-len(c["items"]), str(c["signature"])))
     clusters = clusters[:max_clusters]
 
-    updated = dict(normalized)
+    updated = {}
+    for exp_id, record in normalized.items():
+        cleaned = dict(record)
+        cleaned["skill_ids"] = []
+        updated[exp_id] = normalize_experience_record(exp_id, cleaned)
+    active_skill_ids = set()
     for cluster in clusters:
         skill_id = _cluster_skill_id(cluster)
+        active_skill_ids.add(skill_id)
         items = cluster["items"]
         exp_ids = [exp_id for exp_id, _ in items]
         records = [updated[exp_id] for exp_id in exp_ids if exp_id in updated]
+        all_failure_cluster = all(record.get("kind") == "failure" for record in records)
         task_tags = sorted({tag for record in records for tag in record.get("task_tags", [])})
         tool_tags = sorted({tag for record in records for tag in record.get("tool_tags", [])})
-        visual_tags = sorted({tag for record in records for tag in record.get("visual_tags", [])})
-        failure_modes = sorted({record.get("failure_mode") for record in records if record.get("failure_mode")})
         confidence = round(sum(record.get("confidence", 0.5) for record in records) / max(1, len(records)), 3)
-        evidence_rollouts = []
-        for record in records:
-            for rollout in record.get("evidence_rollouts", []):
-                if rollout not in evidence_rollouts:
-                    evidence_rollouts.append(rollout)
 
         metadata = {
             "skill_id": skill_id,
             "path": str(out_dir / f"{skill_id}.md"),
             "task_tags": task_tags,
             "tool_tags": tool_tags,
-            "visual_tags": visual_tags,
-            "failure_modes": failure_modes,
             "linked_experience_ids": exp_ids,
             "confidence": confidence,
-            "evidence_rollouts": evidence_rollouts[:8],
-            "trigger_text": " ".join(task_tags + tool_tags + visual_tags + failure_modes),
+            "trigger_text": " ".join(task_tags + tool_tags),
             "updated_at": datetime.now().isoformat(),
         }
 
@@ -277,38 +425,35 @@ def cluster_experiences_to_skills(
             if exp_id in updated
         )
         rollout_evidence = _read_rollout_evidence(records)
+        support_text = f"{exp_text}\n\n{rollout_evidence}"
         prompt = GENERATE_CLUSTER_SKILL_PROMPT.format(
             skill_id=skill_id,
             task_tags=", ".join(task_tags) or "general",
             tool_tags=", ".join(tool_tags) or "reasoning",
-            visual_tags=", ".join(visual_tags) or "unspecified",
-            failure_modes=", ".join(failure_modes) or "none",
             experience_ids=", ".join(exp_ids),
             experiences=exp_text,
             rollout_evidence=rollout_evidence,
         )
 
-        try:
-            skill_content = llm.chat(prompt, max_tokens=8192).strip()
-            skill_content = re.sub(r"^```markdown\n", "", skill_content)
-            skill_content = re.sub(r"^```\n", "", skill_content)
-            skill_content = re.sub(r"\n```$", "", skill_content).strip()
-        except Exception as e:
-            print(f"  [Skill Cluster] Warning: failed to generate {skill_id}: {e}")
-            skill_content = ""
+        if all_failure_cluster:
+            skill_content = _failure_guardrail_skill_content(skill_id, records, metadata)
+        else:
+            try:
+                skill_content = llm.chat(prompt, max_tokens=4096).strip()
+                skill_content = re.sub(r"^```markdown\n", "", skill_content)
+                skill_content = re.sub(r"^```\n", "", skill_content)
+                skill_content = re.sub(r"\n```$", "", skill_content).strip()
+            except Exception as e:
+                print(f"  [Skill Cluster] Warning: failed to generate {skill_id}: {e}")
+                skill_content = ""
 
         if not skill_content:
             skill_content = _fallback_skill_content(skill_id, records, metadata)
+        skill_content = _sanitize_evidence_bounded_skill(skill_content, support_text)
 
         skill_path = Path(metadata["path"])
         skill_path.write_text(skill_content, encoding="utf-8")
 
-        old_stats = index["skills"].get(skill_id, {}).get("stats", {})
-        metadata["stats"] = {
-            "used_count": int(old_stats.get("used_count", 0) or 0),
-            "success_after_used": int(old_stats.get("success_after_used", 0) or 0),
-            "failure_after_used": int(old_stats.get("failure_after_used", 0) or 0),
-        }
         index["skills"][skill_id] = metadata
 
         for exp_id in exp_ids:
@@ -317,10 +462,33 @@ def cluster_experiences_to_skills(
             record["skill_ids"] = skill_ids
             updated[exp_id] = normalize_experience_record(exp_id, record)
 
+    _prune_stale_skills(index, active_skill_ids, out_dir)
     save_skill_index(skill_library_path, index)
     _write_skill_manifest(skill_library_path, index)
     print(f"  [Skill Cluster] Generated/updated {len(clusters)} modular skills in {out_dir}")
     return updated
+
+
+def _prune_stale_skills(index: SkillIndex, active_skill_ids: set, out_dir: Path) -> None:
+    """Remove skills that no longer correspond to current experience clusters."""
+    skills = index.get("skills", {})
+    if not isinstance(skills, dict):
+        index["skills"] = {}
+        return
+
+    out_dir_resolved = out_dir.resolve()
+    for skill_id, item in list(skills.items()):
+        if skill_id in active_skill_ids:
+            continue
+        path = item.get("path") if isinstance(item, dict) else None
+        if path:
+            try:
+                skill_path = Path(path).resolve()
+                skill_path.relative_to(out_dir_resolved)
+                skill_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        del skills[skill_id]
 
 
 def _write_skill_manifest(skill_library_path: str, index: SkillIndex) -> None:
@@ -343,58 +511,324 @@ def _write_skill_manifest(skill_library_path: str, index: SkillIndex) -> None:
     Path(skill_library_path).write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
 
 
-def _tokenize(text: str) -> set:
-    return set(re.findall(r"[a-zA-Z0-9_]+", (text or "").lower()))
+def _truncate_text(text: str, max_chars: int) -> str:
+    text = text or ""
+    return text if len(text) <= max_chars else text[:max_chars] + "\n...[truncated]"
 
 
-def select_skills_for_task(
+def _read_skill_content(item: Dict[str, Any]) -> str:
+    path = item.get("path", "") if isinstance(item, dict) else ""
+    if not path:
+        return ""
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except Exception:
+        return ""
+
+
+def _skill_retrieval_text(skill_id: str, item: Dict[str, Any], content: Optional[str] = None) -> str:
+    content = content if content is not None else _read_skill_content(item)
+    fields = [
+        f"skill_id: {skill_id}",
+        f"description: {item.get('description', '')}",
+        f"trigger: {item.get('trigger_text', '')}",
+        f"task_tags: {', '.join(item.get('task_tags', []))}",
+        f"tool_tags: {', '.join(item.get('tool_tags', []))}",
+        f"linked_experience_ids: {', '.join(item.get('linked_experience_ids', []))}",
+        _truncate_text(content, 4000),
+    ]
+    return "\n".join(part for part in fields if part is not None)
+
+
+def _cosine_scores(query_embedding: np.ndarray, matrix: np.ndarray) -> np.ndarray:
+    q = query_embedding.reshape(1, -1)
+    q_norm = np.linalg.norm(q, axis=1, keepdims=True)
+    m_norm = np.linalg.norm(matrix, axis=1, keepdims=True)
+    q_norm[q_norm == 0] = 1.0
+    m_norm[m_norm == 0] = 1.0
+    return ((q / q_norm) @ (matrix / m_norm).T)[0]
+
+
+def _queries_from_retrieval_info(query_text: str, retrieval_info: Optional[Dict[str, Any]]) -> List[Dict[str, str]]:
+    if retrieval_info and retrieval_info.get("decomposition_used"):
+        queries = []
+        for subtask in retrieval_info.get("subtasks", []):
+            if not isinstance(subtask, dict):
+                continue
+            query = str(subtask.get("query") or "").strip()
+            if query:
+                queries.append({
+                    "type": str(subtask.get("type") or "subtask"),
+                    "query": query,
+                })
+        if queries:
+            return queries
+    return [{"type": "original", "query": query_text}]
+
+
+def retrieve_skills_for_task(
     skill_library_path: Optional[str],
     query_text: str,
     retrieval_info: Optional[Dict[str, Any]] = None,
-    top_k: int = 2,
-) -> List[Dict[str, Any]]:
+    top_k: int = 3,
+    min_similarity: float = 0.0,
+    available_experience_ids: Optional[Iterable[str]] = None,
+    embedding_model: Optional[str] = None,
+    embedding_api_key: Optional[str] = None,
+    embedding_endpoint: Optional[str] = None,
+    enable_cache: bool = True,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Embedding-retrieve modular skills, retrieving top_k skills per subtask query."""
+    empty_info = {
+        "retrieval_method": "embedding",
+        "top_k_per_query": top_k,
+        "retrieved_skill_ids": [],
+        "retrieval_details": [],
+    }
+    if not skill_library_path or top_k <= 0:
+        return [], empty_info
+
     index = load_skill_index(skill_library_path)
     skills = index.get("skills", {})
     if not skills:
-        return []
+        return [], empty_info
 
-    subtask_texts = []
-    if retrieval_info:
-        for subtask in retrieval_info.get("subtasks", []):
-            if isinstance(subtask, dict):
-                subtask_texts.append(str(subtask.get("query") or subtask.get("description") or ""))
-            else:
-                subtask_texts.append(str(subtask))
-    query_tokens = _tokenize(" ".join([query_text] + subtask_texts))
-
-    scored = []
+    available_ids = set(available_experience_ids) if available_experience_ids is not None else None
+    skill_texts = {}
+    skill_contents = {}
     for skill_id, item in skills.items():
-        trigger = " ".join(
-            [item.get("trigger_text", "")]
-            + item.get("task_tags", [])
-            + item.get("tool_tags", [])
-            + item.get("visual_tags", [])
-            + item.get("failure_modes", [])
-        )
-        skill_tokens = _tokenize(trigger)
-        overlap = len(query_tokens & skill_tokens)
-        confidence = float(item.get("confidence", 0.5) or 0.5)
-        linked_count = len(item.get("linked_experience_ids", []))
-        score = overlap * 2.0 + confidence + min(linked_count, 5) * 0.1
-        if score > 0:
-            scored.append((score, skill_id, item))
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    selected = []
-    for score, skill_id, item in scored[:top_k]:
-        path = item.get("path", "")
-        content = ""
-        try:
-            content = Path(path).read_text(encoding="utf-8")
-        except Exception:
+        linked_ids = item.get("linked_experience_ids", []) if isinstance(item, dict) else []
+        if available_ids is not None and not any(exp_id in available_ids for exp_id in linked_ids):
             continue
-        selected.append({"skill_id": skill_id, "score": score, "metadata": item, "content": content})
-    return selected
+        content = _read_skill_content(item)
+        if not content:
+            continue
+        skill_contents[skill_id] = content
+        skill_texts[skill_id] = _skill_retrieval_text(skill_id, item, content)
+
+    if not skill_texts:
+        return [], empty_info
+
+    try:
+        from .experience_retriever import ExperienceRetriever
+
+        retriever = ExperienceRetriever(
+            experiences=skill_texts,
+            embedding_model=embedding_model or os.environ.get("EXPERIENCE_EMBEDDING_MODEL", "text-embedding-3-small"),
+            embedding_api_key=embedding_api_key or os.environ.get("EXPERIENCE_EMBEDDING_API_KEY") or os.environ.get("OPENAI_API_KEY"),
+            embedding_endpoint=embedding_endpoint or os.environ.get("EXPERIENCE_EMBEDDING_ENDPOINT") or os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1"),
+            cache_dir=str(_skill_root(skill_library_path)),
+            enable_cache=enable_cache,
+            experience_library_path=str(skill_index_path(skill_library_path)),
+        )
+    except Exception as e:
+        print(f"  [Skill Retrieval] Warning: failed to initialize embedding retriever: {e}")
+        empty_info["error"] = str(e)
+        return [], empty_info
+
+    queries = _queries_from_retrieval_info(query_text, retrieval_info)
+    candidate_by_id: Dict[str, Dict[str, Any]] = {}
+    details = []
+    for query_item in queries:
+        query = query_item["query"]
+        query_embedding = retriever._generate_embedding(query)
+        if query_embedding is None or not retriever._experience_embeddings:
+            details.append({
+                "query": query,
+                "type": query_item["type"],
+                "retrieved_skill_ids": [],
+                "count": 0,
+            })
+            continue
+
+        skill_ids = list(retriever._experience_embeddings.keys())
+        matrix = np.vstack([retriever._experience_embeddings[sid] for sid in skill_ids])
+        scores = _cosine_scores(query_embedding, matrix)
+        ranked = [
+            (skill_ids[i], float(scores[i]))
+            for i in range(len(skill_ids))
+            if float(scores[i]) >= min_similarity
+        ]
+        ranked.sort(key=lambda item: item[1], reverse=True)
+        top_ranked = ranked[:top_k]
+        details.append({
+            "query": query,
+            "type": query_item["type"],
+            "retrieved_skill_ids": [sid for sid, _ in top_ranked],
+            "scores": {sid: score for sid, score in top_ranked},
+            "count": len(top_ranked),
+        })
+
+        for rank, (skill_id, score) in enumerate(top_ranked, 1):
+            item = skills[skill_id]
+            entry = candidate_by_id.get(skill_id)
+            if entry is None:
+                entry = {
+                    "skill_id": skill_id,
+                    "score": score,
+                    "metadata": item,
+                    "content": skill_contents[skill_id],
+                    "matched_queries": [],
+                }
+                candidate_by_id[skill_id] = entry
+            entry["score"] = max(float(entry.get("score", 0.0)), score)
+            entry["matched_queries"].append({
+                "query": query,
+                "type": query_item["type"],
+                "rank": rank,
+                "score": score,
+            })
+
+    candidates = sorted(candidate_by_id.values(), key=lambda item: item.get("score", 0.0), reverse=True)
+    info = {
+        "retrieval_method": "embedding",
+        "top_k_per_query": top_k,
+        "retrieved_skill_ids": [item["skill_id"] for item in candidates],
+        "retrieval_details": details,
+        "total_unique_skills": len(candidates),
+    }
+    return candidates, info
+
+
+def _extract_json_object(text: str) -> Dict[str, Any]:
+    text = (text or "").strip()
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL | re.IGNORECASE)
+    if fenced:
+        text = fenced.group(1)
+    else:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            text = text[start : end + 1]
+    data = json.loads(text)
+    return data if isinstance(data, dict) else {}
+
+
+def _format_skill_candidate_for_rerank(skill: Dict[str, Any], max_chars: int = 1800) -> str:
+    metadata = skill.get("metadata", {}) if isinstance(skill, dict) else {}
+    skill_id = skill.get("skill_id", "") if isinstance(skill, dict) else ""
+    fields = [
+        f"[{skill_id}] score={float(skill.get('score', 0.0) or 0.0):.3f}",
+        f"description: {metadata.get('description', '')}",
+        f"task_tags: {', '.join(metadata.get('task_tags', []) or [])}",
+        f"tool_tags: {', '.join(metadata.get('tool_tags', []) or [])}",
+        f"linked_experience_ids: {', '.join(metadata.get('linked_experience_ids', []) or [])}",
+        "content:",
+        _truncate_text(skill.get("content", ""), max_chars),
+    ]
+    return "\n".join(fields)
+
+
+def _format_experience_candidate_for_rerank(exp_id: str, record: Dict[str, Any], max_chars: int = 1200) -> str:
+    text = format_experience_for_prompt(exp_id, record)
+    return f"[{exp_id}]\n{_truncate_text(text, max_chars)}"
+
+
+def rerank_memory_with_llm(
+    query_text: str,
+    candidate_skills: List[Dict[str, Any]],
+    candidate_experiences: ExperienceLibrary,
+    llm: Any,
+    max_skills: int = 2,
+    max_experiences: int = 8,
+    debug_dir: Optional[str] = None,
+    question_id: Optional[str] = None,
+) -> Tuple[List[Dict[str, Any]], ExperienceLibrary, Dict[str, Any]]:
+    """Use an LLM to select useful skills/experiences from embedding candidates."""
+    max_skills = max(0, int(max_skills or 0))
+    max_experiences = max(0, int(max_experiences or 0))
+    normalized_experiences = normalize_experience_library(candidate_experiences)
+
+    skill_by_id = {
+        str(skill.get("skill_id")): skill
+        for skill in candidate_skills
+        if isinstance(skill, dict) and skill.get("skill_id")
+    }
+    exp_by_id = {str(exp_id): record for exp_id, record in normalized_experiences.items()}
+
+    fallback_skills = candidate_skills[:max_skills]
+    fallback_experiences = dict(list(exp_by_id.items())[:max_experiences])
+    info: Dict[str, Any] = {
+        "rerank_used": False,
+        "question_id": question_id,
+        "candidate_skill_ids": list(skill_by_id.keys()),
+        "candidate_experience_ids": list(exp_by_id.keys()),
+        "selected_skill_ids": [skill.get("skill_id") for skill in fallback_skills],
+        "selected_experience_ids": list(fallback_experiences.keys()),
+        "fallback": False,
+    }
+
+    if not skill_by_id and not exp_by_id:
+        return [], {}, info
+    if llm is None:
+        info["fallback"] = True
+        info["error"] = "llm_not_available"
+        return fallback_skills, fallback_experiences, info
+
+    skill_text = "\n\n".join(
+        _format_skill_candidate_for_rerank(skill)
+        for skill in candidate_skills
+        if skill.get("skill_id") in skill_by_id
+    ) or "(none)"
+    exp_text = "\n\n".join(
+        _format_experience_candidate_for_rerank(exp_id, record)
+        for exp_id, record in exp_by_id.items()
+    ) or "(none)"
+    prompt = _load_memory_prompt("memory_rerank").format(
+        query=query_text,
+        skills=skill_text,
+        experiences=exp_text,
+        max_skills=max_skills,
+        max_experiences=max_experiences,
+    )
+
+    try:
+        response = llm.chat(prompt, max_tokens=2048, temperature=0.0)
+        parsed = _extract_json_object(response)
+        if "skill_ids" not in parsed or "experience_ids" not in parsed:
+            raise ValueError("rerank response missing skill_ids or experience_ids")
+        raw_skill_ids = parsed.get("skill_ids", [])
+        raw_exp_ids = parsed.get("experience_ids", [])
+        if not isinstance(raw_skill_ids, list) or not isinstance(raw_exp_ids, list):
+            raise ValueError("rerank response skill_ids/experience_ids must be lists")
+
+        skill_ids = [
+            str(skill_id)
+            for skill_id in raw_skill_ids
+            if str(skill_id) in skill_by_id
+        ][:max_skills]
+        exp_ids = [
+            str(exp_id)
+            for exp_id in raw_exp_ids
+            if str(exp_id) in exp_by_id
+        ][:max_experiences]
+
+        selected_skills = [skill_by_id[skill_id] for skill_id in skill_ids]
+        selected_experiences = {exp_id: exp_by_id[exp_id] for exp_id in exp_ids}
+
+        info.update({
+            "rerank_used": True,
+            "selected_skill_ids": skill_ids,
+            "selected_experience_ids": exp_ids,
+            "notes": parsed.get("notes", ""),
+            "fallback": False,
+        })
+        if debug_dir:
+            Path(debug_dir).mkdir(parents=True, exist_ok=True)
+            Path(debug_dir, "tt_memory_rerank.json").write_text(
+                json.dumps({"prompt": prompt, "response": response, "info": info}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        return selected_skills, selected_experiences, info
+    except Exception as e:
+        info.update({
+            "fallback": True,
+            "error": str(e),
+            "selected_skill_ids": [skill.get("skill_id") for skill in fallback_skills],
+            "selected_experience_ids": list(fallback_experiences.keys()),
+        })
+        print(f"  [Memory Rerank] Warning: LLM rerank failed, using embedding order: {e}")
+        return fallback_skills, fallback_experiences, info
 
 
 def collect_linked_experiences(selected_skills: List[Dict[str, Any]], experiences: ExperienceLibrary) -> ExperienceLibrary:
@@ -405,23 +839,6 @@ def collect_linked_experiences(selected_skills: List[Dict[str, Any]], experience
             if exp_id in normalized:
                 linked[exp_id] = normalized[exp_id]
     return linked
-
-
-def rerank_experiences_for_skills(
-    direct_experiences: ExperienceLibrary,
-    linked_experiences: ExperienceLibrary,
-    selected_skill_ids: List[str],
-    max_items: int = 8,
-) -> ExperienceLibrary:
-    combined = normalize_experience_library({**direct_experiences, **linked_experiences})
-    scored = []
-    for exp_id, record in combined.items():
-        linked_bonus = 1.0 if any(skill_id in record.get("skill_ids", []) for skill_id in selected_skill_ids) else 0.0
-        failure_bonus = 0.2 if record.get("kind") == "failure" else 0.0
-        score = linked_bonus + failure_bonus + float(record.get("confidence", 0.5) or 0.5)
-        scored.append((score, exp_id, record))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return {exp_id: record for _, exp_id, record in scored[:max_items]}
 
 
 def format_selected_skills_for_prompt(selected_skills: List[Dict[str, Any]]) -> str:
@@ -446,107 +863,51 @@ def update_memory_usage_after_sample(
     except Exception:
         return
 
-    from .experience_utils import load_experiences, save_library
+    from .experience_utils import EXPERIENCE_LIBRARY_LOCK, load_experiences, save_library
 
-    experiences = load_experiences(experience_library_path)
-    selected_skill_ids = usage.get("selected_skill_ids", [])
-    used_exp_ids = usage.get("retrieved_experience_ids", [])
-    success = any(float(result.get("accuracy_score", 0.0) or 0.0) == 1.0 for result in rollout_results if isinstance(result, dict))
+    with EXPERIENCE_LIBRARY_LOCK:
+        experiences = load_experiences(experience_library_path)
+        selected_skill_ids = usage.get("selected_skill_ids", [])
+        used_exp_ids = usage.get("retrieved_experience_ids", [])
+        similarity_scores = usage.get("similarity_scores", {})
+        success = any(float(result.get("accuracy_score", 0.0) or 0.0) == 1.0 for result in rollout_results if isinstance(result, dict))
 
-    for exp_id in used_exp_ids:
-        if exp_id not in experiences:
-            continue
-        record = dict(experiences[exp_id])
-        stats = dict(record.get("stats", {}))
-        stats["used_count"] = int(stats.get("used_count", 0) or 0) + 1
-        key = "success_after_used" if success else "failure_after_used"
-        stats[key] = int(stats.get(key, 0) or 0) + 1
-        record["stats"] = stats
-        experiences[exp_id] = normalize_experience_record(exp_id, record)
-
-    failure_exp_id = None
-    if not success and selected_skill_ids:
-        next_id = _next_experience_id(experiences)
-        failure_exp_id = next_id
-        task = sample.get("task") or "general"
-        evidence_rollouts = []
-        for idx, result in enumerate(rollout_results):
-            if not isinstance(result, dict):
+        valid_used_exp_ids = []
+        for exp_id in used_exp_ids:
+            if exp_id not in experiences:
                 continue
-            rollout_idx = result.get("_rollout_idx", idx)
-            rollout_dir = Path(sample_dir) / f"rollout_{rollout_idx}" if len(rollout_results) > 1 else Path(sample_dir)
-            evidence_rollouts.append({
-                "doc_id": sample.get("doc_id", sample.get("question_id", "")),
-                "rollout_id": f"{sample.get('doc_id', sample.get('question_id', 'sample'))}:rollout_{rollout_idx}",
-                "rollout_idx": rollout_idx,
-                "traj_path": str(rollout_dir / "traj.jsonl"),
-                "accuracy_score": result.get("accuracy_score"),
-                "success": False,
-                "final_answer": result.get("final_answer"),
-            })
-        experiences[next_id] = normalize_experience_record(
-            next_id,
-            {
-                "kind": "failure",
-                "skill_ids": selected_skill_ids,
-                "task_tags": [task],
-                "tool_tags": [],
-                "visual_tags": [],
-                "failure_mode": "failed_after_skill_use",
-                "confidence": 0.6,
-                "action_policy": {
-                    "when": "selected skills and experiences still fail",
-                    "do": "revisit the linked rollout evidence and add a stricter verification step",
-                },
-                "evidence_rollouts": evidence_rollouts,
-                "content": "When selected skills still lead to a wrong answer, add an explicit verification step instead of trusting the adapted workflow.",
-            },
-        )
-        used_exp_ids.append(next_id)
-
-    save_library(experience_library_path, experiences)
-
-    if skill_library_path and selected_skill_ids:
-        index = load_skill_index(skill_library_path)
-        for skill_id in selected_skill_ids:
-            item = index.get("skills", {}).get(skill_id)
-            if not item:
-                continue
-            stats = dict(item.get("stats", {}))
+            valid_used_exp_ids.append(exp_id)
+            record = dict(experiences[exp_id])
+            stats = dict(record.get("stats", {}))
             stats["used_count"] = int(stats.get("used_count", 0) or 0) + 1
             key = "success_after_used" if success else "failure_after_used"
             stats[key] = int(stats.get(key, 0) or 0) + 1
-            item["stats"] = stats
-            if not success:
-                item["needs_refine"] = True
-                item["linked_experience_ids"] = list(dict.fromkeys(item.get("linked_experience_ids", []) + used_exp_ids))
-                _append_skill_feedback(item, sample, failure_exp_id)
-            index["skills"][skill_id] = item
-        save_skill_index(skill_library_path, index)
+            record["stats"] = stats
+            # Similarity-weighted confidence: higher similarity → larger update
+            conf = float(record.get("confidence", 0.5) or 0.5)
+            sim = float(similarity_scores.get(exp_id, 0.5))
+            if success:
+                conf = min(1.0, conf + 0.05 * sim)
+            else:
+                conf = max(0.0, conf - 0.1 * sim)
+            record["confidence"] = round(conf, 4)
+            experiences[exp_id] = normalize_experience_record(exp_id, record)
 
+        save_library(experience_library_path, experiences)
 
-def _append_skill_feedback(item: Dict[str, Any], sample: Dict[str, Any], failure_exp_id: Optional[str]) -> None:
-    path = item.get("path")
-    if not path or not failure_exp_id:
-        return
-    feedback = (
-        "\n\n## Failure Feedback\n"
-        f"- Linked failure experience `{failure_exp_id}` from `{sample.get('doc_id', sample.get('question_id', 'unknown'))}`. "
-        "Add an explicit verification step before reusing this skill on similar cases.\n"
-    )
-    try:
-        skill_path = Path(path)
-        existing = skill_path.read_text(encoding="utf-8") if skill_path.exists() else ""
-        marker = f"Linked failure experience `{failure_exp_id}`"
-        if marker not in existing:
-            skill_path.write_text(existing.rstrip() + feedback, encoding="utf-8")
-    except Exception:
-        pass
-
-
-def _next_experience_id(experiences: ExperienceLibrary) -> str:
-    nums = []
-    for exp_id in experiences:
-        if isinstance(exp_id, str) and exp_id.startswith("E") and exp_id[1:].isdigit():
-            nums.append(int(exp_id[1:]))
-    return f"E{max(nums, default=-1) + 1}"
+        if skill_library_path and selected_skill_ids:
+            index = load_skill_index(skill_library_path)
+            for skill_id in selected_skill_ids:
+                item = index.get("skills", {}).get(skill_id)
+                if not item:
+                    continue
+                stats = dict(item.get("stats", {}))
+                stats["used_count"] = int(stats.get("used_count", 0) or 0) + 1
+                key = "success_after_used" if success else "failure_after_used"
+                stats[key] = int(stats.get(key, 0) or 0) + 1
+                item["stats"] = stats
+                if not success:
+                    item["needs_refine"] = True
+                    item["linked_experience_ids"] = list(dict.fromkeys(item.get("linked_experience_ids", []) + valid_used_exp_ids))
+                index["skills"][skill_id] = item
+            save_skill_index(skill_library_path, index)

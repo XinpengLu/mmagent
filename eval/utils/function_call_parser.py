@@ -70,7 +70,8 @@ def parse_function_call_response(response: Union[str, Dict], text_content: str =
                 
                 return "function_call", {
                     "tool_name": tool_name,
-                    "parameters": parameters
+                    "parameters": parameters,
+                    "tool_call_id": first_call.get("id"),
                 }
         
         # If no function call, check for text content

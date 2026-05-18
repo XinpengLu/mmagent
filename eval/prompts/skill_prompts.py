@@ -60,24 +60,22 @@ version: 1.0.0
 Output ONLY the SKILL.md content starting with `---`."""
 
 
-GENERATE_CLUSTER_SKILL_PROMPT = """You are a skilled AI agent architect. Build one reusable skill from a cluster of structured experiences and supporting rollouts.
+GENERATE_CLUSTER_SKILL_PROMPT = """Build one compact reusable skill from the clustered experiences and rollout evidence.
 
-The skill should be selected later by task/tool tags, so make it modular and specific to this cluster rather than a global manual.
+The skill will be retrieved by embedding, so keep it modular, concrete, and evidence-bounded.
 
 ### Cluster Metadata:
 - Skill ID: {skill_id}
 - Task tags: {task_tags}
 - Tool tags: {tool_tags}
-- Visual tags: {visual_tags}
-- Failure modes: {failure_modes}
 - Linked experience IDs: {experience_ids}
 
-### Design Rules:
-1. Use the experiences as distilled evidence, but inspect the rollout excerpts for reusable tool/code patterns.
-2. Capture executable knowledge: code templates, validation checks, tool sequencing, and when to stop.
-3. Include both success patterns and failure-prevention rules.
-4. Keep the skill concise: target 400-700 words.
-5. Use placeholders instead of task-specific answers.
+### Rules:
+1. Use only lessons supported by the experiences or rollouts.
+2. Preserve success patterns and failure guardrails; do not turn a failed pattern into a recipe unless a successful rollout supports it.
+3. Do not include hardcoded answers, layouts, coordinates, object lists, recognized text, or task-specific examples.
+4. Tool templates must start from the current image/problem text and include a check that the intermediate result matches the question.
+5. Keep it short: 200-400 words.
 
 ### Output Structure:
 ```
@@ -88,25 +86,25 @@ description: |
 version: 1.0.0
 task_tags: [...]
 tool_tags: [...]
-visual_tags: [...]
 linked_experience_ids: [...]
 ---
 
 # [Skill Title]
 
 ## When to Use
-- ...
+- [short trigger condition]
 
 ## Workflow
-1. ...
+1. [actionable step]
+2. [validation/stop condition]
 
-## Tool Templates
+## Tool Template
 ```python
-# reusable template if applicable
+# optional; include only if evidence supports a reusable pattern
 ```
 
-## Failure Checks
-- ...
+## Guardrails
+- [failure-prevention rule]
 ```
 
 <experiences>
@@ -137,6 +135,7 @@ For each part of the new skill, ask:
 - Delete overly specific examples and cases that don't apply to similar problems
 - Consolidate similar trigger phrases
 - If workflows differ only in minor details, merge them into one with noted variations
+- Keep additions evidence-bounded: do not add methods or algorithms that are not present in the incoming skills or their supporting experiences.
 
 ### Length Budget:
 - Target: ~1000 words

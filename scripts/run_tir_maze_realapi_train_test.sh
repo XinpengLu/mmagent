@@ -35,14 +35,14 @@ TEST_SOURCE="${TEST_SOURCE:-$BENCH_ROOT/$BENCHMARK/test.json}"
 IMAGE_DIR="${IMAGE_DIR:-$BENCH_ROOT}"
 
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
-RUN_ROOT="${RUN_ROOT:-$DATA_ROOT/output/tir_maze_realapi/$RUN_ID}"
+RUN_ROOT="${RUN_ROOT:-$DATA_ROOT/output/tir_${TASK}_realapi/$RUN_ID}"
 FILTERED_DIR="${FILTERED_DIR:-$RUN_ROOT/data}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-$RUN_ROOT/output}"
-LOG_ROOT="${LOG_ROOT:-$DATA_ROOT/logs/tir_maze_realapi/$RUN_ID}"
+LOG_ROOT="${LOG_ROOT:-$DATA_ROOT/logs/tir_${TASK}_realapi/$RUN_ID}"
 
 # Keep memory inside this run directory so existing $DATA_ROOT/memory_bank is untouched.
 MEMORY_ROOT="${MEMORY_ROOT:-$RUN_ROOT/memory_bank}"
-MEMORY_NAME="${MEMORY_NAME:-tir_maze_realapi_$RUN_ID}"
+MEMORY_NAME="${MEMORY_NAME:-tir_${TASK}_realapi_$RUN_ID}"
 EXPERIENCE_LIBRARY="$MEMORY_ROOT/experiences.json"
 SKILL_LIBRARY="$MEMORY_ROOT/SKILL.md"
 export MEMORY_ROOT MEMORY_NAME EXPERIENCE_LIBRARY SKILL_LIBRARY
@@ -59,6 +59,34 @@ mkdir -p "$FILTERED_DIR" "$OUTPUT_ROOT" "$LOG_ROOT" "$MEMORY_ROOT"
 
 TRAIN_DATA="$FILTERED_DIR/tir_${TASK}_train.json"
 TEST_DATA="$FILTERED_DIR/tir_${TASK}_test.json"
+
+case "$TASK" in
+    maze)
+        TRAIN_EXPECTED="${TRAIN_EXPECTED:-27}"
+        TEST_EXPECTED="${TEST_EXPECTED:-51}"
+        ;;
+    refcoco)
+        TRAIN_EXPECTED="${TRAIN_EXPECTED:-27}"
+        TEST_EXPECTED="${TEST_EXPECTED:-60}"
+        ;;
+    instrument)
+        TRAIN_EXPECTED="${TRAIN_EXPECTED:-22}"
+        TEST_EXPECTED="${TEST_EXPECTED:-39}"
+        ;;
+    ocr)
+        TRAIN_EXPECTED="${TRAIN_EXPECTED:-15}"
+        TEST_EXPECTED="${TEST_EXPECTED:-28}"
+        ;;
+    contrast)
+        TRAIN_EXPECTED="${TRAIN_EXPECTED:-9}"
+        TEST_EXPECTED="${TEST_EXPECTED:-22}"
+        ;;
+    *)
+        echo "Error: unsupported TIR-Bench task: $TASK"
+        echo "Supported tasks: maze, refcoco, instrument, ocr, contrast"
+        exit 2
+        ;;
+esac
 
 filter_split() {
     local src="$1"
@@ -114,8 +142,9 @@ summarize_metrics() {
     local test_output="$2"
     local summary_path="$3"
     local k="$4"
+    local task="$5"
 
-    python3 - "$train_output" "$test_output" "$summary_path" "$k" <<'PY'
+    python3 - "$train_output" "$test_output" "$summary_path" "$k" "$task" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -124,6 +153,7 @@ train_output = Path(sys.argv[1])
 test_output = Path(sys.argv[2])
 summary_path = Path(sys.argv[3])
 k = int(sys.argv[4])
+task = sys.argv[5]
 
 def read_metrics(output_dir: Path):
     metrics_path = output_dir / "metrics_at_k.json"
@@ -156,7 +186,7 @@ def read_metrics(output_dir: Path):
     }
 
 summary = {
-    "task": "maze",
+    "task": task,
     "k": k,
     "train": read_metrics(train_output),
     "test": read_metrics(test_output),
@@ -167,7 +197,7 @@ with summary_path.open("w", encoding="utf-8") as f:
     json.dump(summary, f, indent=2, ensure_ascii=False)
 
 print("======================================================================")
-print("TIR-Bench maze real-API metrics")
+print("TIR-Bench real-API metrics")
 for split in ("train", "test"):
     item = summary[split]
     print(f"{split}:")
@@ -192,8 +222,8 @@ if (( EXPERIENCE_LARGE_BATCH % ROLLOUTS_PER_SAMPLE != 0 )); then
     exit 2
 fi
 
-filter_split "$TRAIN_SOURCE" "$TRAIN_DATA" "train" 27
-filter_split "$TEST_SOURCE" "$TEST_DATA" "test" 51
+filter_split "$TRAIN_SOURCE" "$TRAIN_DATA" "train" "$TRAIN_EXPECTED"
+filter_split "$TEST_SOURCE" "$TEST_DATA" "test" "$TEST_EXPECTED"
 
 MAX_SAMPLES_TRAIN="${MAX_SAMPLES_TRAIN:-$(count_json_items "$TRAIN_DATA")}"
 MAX_SAMPLES_TEST="${MAX_SAMPLES_TEST:-$(count_json_items "$TEST_DATA")}"
@@ -204,7 +234,7 @@ TRAIN_LOG="$LOG_ROOT/train"
 TEST_LOG="$LOG_ROOT/test"
 
 echo "======================================================================"
-echo "TIR-Bench maze real-API train/test"
+echo "TIR-Bench $TASK real-API train/test"
 echo "Data root:      $DATA_ROOT"
 echo "Train data:     $TRAIN_DATA"
 echo "Test data:      $TEST_DATA"
@@ -254,5 +284,4 @@ if [[ "$RUN_TEST" == "1" || "$RUN_TEST" == "true" || "$RUN_TEST" == "TRUE" ]]; t
     bash eval/run_exskill_inference.sh
 fi
 
-summarize_metrics "$TRAIN_OUTPUT" "$TEST_OUTPUT" "$RUN_ROOT/metrics_tir_maze_realapi.json" "$ROLLOUTS_PER_SAMPLE"
-
+summarize_metrics "$TRAIN_OUTPUT" "$TEST_OUTPUT" "$RUN_ROOT/metrics_tir_${TASK}_realapi.json" "$ROLLOUTS_PER_SAMPLE" "$TASK"

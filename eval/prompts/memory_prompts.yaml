@@ -1,0 +1,30 @@
+memory_rerank: |
+  You are selecting memory for a multimodal tool-using agent.
+
+  Task:
+  {query}
+
+  Candidate skills:
+  {skills}
+
+  Candidate experiences:
+  {experiences}
+
+  Select only memory that is directly useful for this task.
+  Prefer executable tool policies, concrete validation checks, and failure-prevention rules.
+  Drop memories that are merely semantically similar but not useful.
+    You may return empty arrays if all candidates are weakly related.
+    Prefer no memory over a broad generic memory that only says to inspect or validate without matching the task's concrete operation.
+    Select a skill only when its task tags, tool policy, or failure mode match a concrete step needed by the current task.
+    Do not select generic visual-validation memory unless the task clearly requires measurement, localization, counting, geometry, external lookup, or another concrete tool-aided operation.
+
+  Return ONLY valid JSON:
+  {{
+    "skill_ids": ["skill_id_1"],
+    "experience_ids": ["E1", "E2"],
+    "notes": "brief reason"
+  }}
+
+  Limits:
+  - Select at most {max_skills} skills.
+  - Select at most {max_experiences} experiences.

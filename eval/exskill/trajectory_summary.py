@@ -22,6 +22,13 @@ MAX_RETRIES = 3
 # 轨迹摘要的输出 token 上限。
 MAX_TOKENS = 12288  # Max tokens for trajectory summarization
 
+# 只用于经验总结 prompt 的轨迹压缩阈值；原始 traj.jsonl 不会被修改。
+MAX_INITIAL_PROMPT_CHARS = int(os.environ.get("TRAJ_SUMMARY_MAX_INITIAL_PROMPT_CHARS", "12000"))
+MAX_TEXT_OUTPUT_CHARS = int(os.environ.get("TRAJ_SUMMARY_MAX_TEXT_OUTPUT_CHARS", "6000"))
+MAX_TOOL_CODE_CHARS = int(os.environ.get("TRAJ_SUMMARY_MAX_TOOL_CODE_CHARS", "6000"))
+MAX_TOOL_RESULT_CHARS = int(os.environ.get("TRAJ_SUMMARY_MAX_TOOL_RESULT_CHARS", "8000"))
+MAX_OTHER_FIELD_CHARS = int(os.environ.get("TRAJ_SUMMARY_MAX_OTHER_FIELD_CHARS", "3000"))
+
 
 # --------- Summarization ---------
 def _normalize_traj_paths(traj_paths: Union[str, List[str]]) -> List[str]:
@@ -160,6 +167,56 @@ def _get_caption_for_image(name_or_path: str, image_captions: Dict[str, str]) ->
     return None
 
 
+def _truncate_for_summary(text: Any, max_chars: int, label: str) -> Any:
+    """Truncate oversized text fields for LLM trajectory summarization only."""
+    if not isinstance(text, str) or max_chars <= 0 or len(text) <= max_chars:
+        return text
+    head = max_chars // 2
+    tail = max_chars - head
+    omitted = len(text) - max_chars
+    return (
+        text[:head]
+        + f"\n...[truncated {omitted} chars from {label}; original length={len(text)}]...\n"
+        + text[-tail:]
+    )
+
+
+def _compact_record_for_summary(rec: Dict[str, Any]) -> Dict[str, Any]:
+    """Compact a trajectory JSON record before putting it into the summary prompt."""
+    if not isinstance(rec, dict):
+        return rec
+
+    if isinstance(rec.get("initial_prompt"), str):
+        rec["initial_prompt"] = _truncate_for_summary(
+            rec["initial_prompt"], MAX_INITIAL_PROMPT_CHARS, "initial_prompt"
+        )
+    if isinstance(rec.get("text_output"), str):
+        rec["text_output"] = _truncate_for_summary(
+            rec["text_output"], MAX_TEXT_OUTPUT_CHARS, "text_output"
+        )
+
+    tool_call = rec.get("tool_call")
+    if isinstance(tool_call, dict):
+        params = tool_call.get("parameters")
+        if isinstance(params, dict):
+            for key, value in list(params.items()):
+                if isinstance(value, str):
+                    limit = MAX_TOOL_CODE_CHARS if key == "code" else MAX_OTHER_FIELD_CHARS
+                    params[key] = _truncate_for_summary(value, limit, f"tool_call.parameters.{key}")
+        if isinstance(tool_call.get("result"), str):
+            tool_call["result"] = _truncate_for_summary(
+                tool_call["result"], MAX_TOOL_RESULT_CHARS, "tool_call.result"
+            )
+
+    for key, value in list(rec.items()):
+        if key in {"initial_prompt", "text_output", "tool_call"}:
+            continue
+        if isinstance(value, str):
+            rec[key] = _truncate_for_summary(value, MAX_OTHER_FIELD_CHARS, key)
+
+    return rec
+
+
 def _replace_image_refs_in_jsonl(
     jsonl_content: str, 
     image_captions: Dict[str, str]
@@ -180,8 +237,9 @@ def _replace_image_refs_in_jsonl(
     Returns:
         Processed JSONL content with image references replaced
     """
-    if not jsonl_content or not image_captions:
+    if not jsonl_content:
         return jsonl_content
+    image_captions = image_captions or {}
     
     lines = []
     for line in jsonl_content.split('\n'):
@@ -224,14 +282,12 @@ def _replace_image_refs_in_jsonl(
                     tool_image_data['caption'] = caption
                     modified = True
             
-            # 只有修改过的 JSONL 行才重新序列化。
-            if modified:
-                lines.append(json.dumps(rec, ensure_ascii=False))
-            else:
-                lines.append(line)
+            rec = _compact_record_for_summary(rec)
+            # summary prompt 使用压缩后的 JSON；原始轨迹文件不变。
+            lines.append(json.dumps(rec, ensure_ascii=False))
         except (json.JSONDecodeError, Exception):
-            # 非 JSON 行保持原样，避免破坏轨迹文件。
-            lines.append(line)
+            # 非 JSON 行保持原样，但避免极端长文本撑爆 summary prompt。
+            lines.append(_truncate_for_summary(line, MAX_OTHER_FIELD_CHARS, "non_json_line"))
     
     return '\n'.join(lines)
 

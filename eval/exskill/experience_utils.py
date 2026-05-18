@@ -4,14 +4,19 @@ import os
 import json
 import base64
 import io
+import threading
 from typing import Any, Dict
 from PIL import Image
 
 from .experience_schema import (
     ExperienceLibrary,
+    compact_experience_record,
     format_experience_for_prompt,
     normalize_experience_library,
 )
+
+
+EXPERIENCE_LIBRARY_LOCK = threading.RLock()
 
 
 def image_to_base64(image: Image.Image) -> str:
@@ -56,10 +61,14 @@ def save_library(path: str, experiences: Dict[str, Any]):
         path: Path to save the JSON file
         experiences: Dictionary mapping experience IDs to experience text
     """
-    # 统一保存为带 experiences 外层字段的结构化格式。
+    # 保存为紧凑结构化格式：只保留检索、注入和 skill 聚类会用到的字段。
     normalized = normalize_experience_library(experiences)
+    compact = {
+        exp_id: compact_experience_record(record, exp_id)
+        for exp_id, record in normalized.items()
+    }
     with open(path, "w", encoding="utf-8") as f:
-        json.dump({"schema_version": 2, "experiences": normalized}, f, ensure_ascii=False, indent=2)
+        json.dump({"schema_version": 3, "experiences": compact}, f, ensure_ascii=False, indent=2)
 
 
 def load_experiences(path: str) -> ExperienceLibrary:
@@ -101,6 +110,12 @@ def format_for_prompt(experiences: Dict[str, Any], max_items: int = 32) -> str:
         return ""
     # 只取前 max_items 条，避免 system prompt 过长。
     items = list(experiences.items())[:max_items]
-    bullets = "\n".join([f"- [{k}] {format_experience_for_prompt(k, v)}" for k, v in items])
+    lines = []
+    for k, v in items:
+        if isinstance(v, str):
+            lines.append(f"- [{k}] {v}")
+        else:
+            lines.append(f"- [{k}] {format_experience_for_prompt(k, v)}")
+    bullets = "\n".join(lines)
     return INJECTION_HEADER.format(bullets=bullets)
 

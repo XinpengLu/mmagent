@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -43,24 +44,18 @@ def _as_float(value: Any, default: float = 0.5) -> float:
     return max(0.0, min(1.0, score))
 
 
-def _as_rollout_list(value: Any) -> List[Dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    rollouts = []
-    for item in value:
-        if isinstance(item, dict):
-            rollout = {str(k): v for k, v in item.items() if v is not None}
-            if rollout:
-                rollouts.append(rollout)
-    return rollouts
-
-
-def _normalize_action_policy(value: Any) -> Dict[str, Any]:
-    if isinstance(value, dict):
-        return deepcopy(value)
-    if isinstance(value, str) and value.strip():
-        return {"instruction": value.strip()}
-    return {}
+def _clean_content_text(text: str) -> str:
+    """Keep retrievable experience text free of duplicated structured metadata."""
+    text = str(text or "").strip()
+    if not text:
+        return ""
+    cleaned = re.sub(
+        r"^\s*\[\s*(?:success|failure)\s*;[^\]]+\]\s*",
+        "",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    ).strip()
+    return cleaned or text
 
 
 def get_experience_content(value: Any) -> str:
@@ -69,12 +64,12 @@ def get_experience_content(value: Any) -> str:
         for key in ("content", "experience", "text"):
             text = value.get(key)
             if isinstance(text, str) and text.strip():
-                return text.strip()
+                return _clean_content_text(text)
         nested = value.get("experience")
         if isinstance(nested, dict):
             return get_experience_content(nested)
         return ""
-    return str(value).strip() if value is not None else ""
+    return _clean_content_text(str(value)) if value is not None else ""
 
 
 def get_experience_kind(value: Any, default: str = "success") -> str:
@@ -100,34 +95,18 @@ def normalize_experience_record(
 
     content = get_experience_content(data if data else value)
     kind = get_experience_kind(data, default=default_kind)
-    failure_mode = data.get("failure_mode")
-    if kind == "success" and failure_mode in ("", "none", "None"):
-        failure_mode = None
-
-    source_evidence = source.get("evidence_rollouts") if isinstance(source, dict) else None
-    merged_source = {}
-    if isinstance(data.get("source"), dict):
-        merged_source.update(data["source"])
-    if source:
-        merged_source.update(source)
 
     stats = data.get("stats") if isinstance(data.get("stats"), dict) else {}
     record_id = exp_id or str(data.get("id", ""))
     confidence_default = 0.7 if kind == "success" else 0.6
-    return {
+    record = {
         "id": record_id,
-        "status": data.get("status", "active"),
         "kind": kind,
         "skill_ids": _as_list(data.get("skill_ids")),
         "task_tags": _as_list(data.get("task_tags")),
         "tool_tags": _as_list(data.get("tool_tags")),
-        "visual_tags": _as_list(data.get("visual_tags")),
-        "failure_mode": failure_mode if kind == "failure" else None,
         "confidence": _as_float(data.get("confidence"), confidence_default),
-        "action_policy": _normalize_action_policy(data.get("action_policy")),
-        "evidence_rollouts": _as_rollout_list(data.get("evidence_rollouts") or source_evidence),
         "content": content,
-        "source": merged_source,
         "stats": {
             "support_count": int(stats.get("support_count", 1) or 1),
             "used_count": int(stats.get("used_count", 0) or 0),
@@ -135,6 +114,11 @@ def normalize_experience_record(
             "failure_after_used": int(stats.get("failure_after_used", 0) or 0),
         },
     }
+    for optional_key in ("code_template", "anti_pattern"):
+        val = data.get(optional_key)
+        if isinstance(val, str) and val.strip():
+            record[optional_key] = val.strip()
+    return record
 
 
 def normalize_experience_library(raw: Any) -> ExperienceLibrary:
@@ -151,6 +135,33 @@ def normalize_experience_library(raw: Any) -> ExperienceLibrary:
             continue
         normalized[str(exp_id)] = normalize_experience_record(str(exp_id), value)
     return normalized
+
+
+def compact_experience_record(value: Any, exp_id: str = "") -> ExperienceRecord:
+    """Serialize the minimal experience schema used by retrieval/injection/skill clustering."""
+    record = normalize_experience_record(exp_id, value)
+    compact: ExperienceRecord = {
+        "kind": record["kind"],
+        "content": record["content"],
+    }
+    for key in ("task_tags", "tool_tags", "skill_ids"):
+        if record.get(key):
+            compact[key] = record[key]
+    for key in ("code_template", "anti_pattern"):
+        if record.get(key):
+            compact[key] = record[key]
+    return compact
+
+
+def compact_experience_operation(operation: Dict[str, Any]) -> Dict[str, Any]:
+    """Compact an add/modify operation for debug files."""
+    if not isinstance(operation, dict):
+        return operation
+    compact = {"option": operation.get("option", "add")}
+    if operation.get("modified_from"):
+        compact["modified_from"] = str(operation["modified_from"])
+    compact["experience"] = compact_experience_record(operation.get("experience", operation))
+    return compact
 
 
 def normalize_experience_operation(
@@ -176,13 +187,10 @@ def normalize_experience_operation(
             "skill_ids",
             "task_tags",
             "tool_tags",
-            "visual_tags",
-            "failure_mode",
             "confidence",
-            "action_policy",
-            "evidence_rollouts",
-            "source",
             "stats",
+            "code_template",
+            "anti_pattern",
         ):
             if key not in data and key in operation:
                 data[key] = operation[key]
@@ -192,14 +200,11 @@ def normalize_experience_operation(
             "skill_ids": operation.get("skill_ids", []),
             "task_tags": operation.get("task_tags", []),
             "tool_tags": operation.get("tool_tags", []),
-            "visual_tags": operation.get("visual_tags", []),
-            "failure_mode": operation.get("failure_mode"),
             "confidence": operation.get("confidence"),
-            "action_policy": operation.get("action_policy", {}),
-            "evidence_rollouts": operation.get("evidence_rollouts", []),
             "content": operation.get("content") or operation.get("experience") or operation.get("exp") or operation.get("text"),
-            "source": operation.get("source", {}),
             "stats": operation.get("stats", {}),
+            "code_template": operation.get("code_template"),
+            "anti_pattern": operation.get("anti_pattern"),
         }
 
     record = normalize_experience_record("", data, default_kind=default_kind, source=source)
@@ -241,21 +246,12 @@ def merge_record_metadata(exp_id: str, records: Iterable[Any], content: str) -> 
     kind = normalized[0]["kind"] if len(kinds) == 1 else "failure"
     task_tags = sorted({tag for r in normalized for tag in r.get("task_tags", [])})
     tool_tags = sorted({tag for r in normalized for tag in r.get("tool_tags", [])})
-    visual_tags = sorted({tag for r in normalized for tag in r.get("visual_tags", [])})
     skill_ids = sorted({tag for r in normalized for tag in r.get("skill_ids", [])})
-    failure_modes = [r.get("failure_mode") for r in normalized if r.get("failure_mode")]
     support_count = sum(r.get("stats", {}).get("support_count", 1) for r in normalized)
+    used_count = sum(r.get("stats", {}).get("used_count", 0) for r in normalized)
+    success_after_used = sum(r.get("stats", {}).get("success_after_used", 0) for r in normalized)
+    failure_after_used = sum(r.get("stats", {}).get("failure_after_used", 0) for r in normalized)
     confidence_values = [r.get("confidence", 0.5) for r in normalized]
-    evidence_rollouts = []
-    for record in normalized:
-        for rollout in record.get("evidence_rollouts", []):
-            if rollout not in evidence_rollouts:
-                evidence_rollouts.append(rollout)
-    action_policy = {}
-    for record in normalized:
-        for key, value in record.get("action_policy", {}).items():
-            action_policy.setdefault(key, value)
-    source_ids = [r.get("id") for r in normalized if r.get("id")]
 
     return normalize_experience_record(
         exp_id,
@@ -264,14 +260,14 @@ def merge_record_metadata(exp_id: str, records: Iterable[Any], content: str) -> 
             "skill_ids": skill_ids,
             "task_tags": task_tags,
             "tool_tags": tool_tags,
-            "visual_tags": visual_tags,
-            "failure_mode": failure_modes[0] if failure_modes else None,
             "confidence": sum(confidence_values) / len(confidence_values) if confidence_values else 0.5,
-            "action_policy": action_policy,
-            "evidence_rollouts": evidence_rollouts,
             "content": content,
-            "source": {"merged_from": source_ids},
-            "stats": {"support_count": support_count},
+            "stats": {
+                "support_count": support_count,
+                "used_count": used_count,
+                "success_after_used": success_after_used,
+                "failure_after_used": failure_after_used,
+            },
         },
     )
 
@@ -280,15 +276,12 @@ def format_experience_for_prompt(exp_id: str, value: Any) -> str:
     record = normalize_experience_record(exp_id, value)
     meta = [record["kind"]]
     if record["task_tags"]:
-        meta.append("task_tags=" + ",".join(record["task_tags"]))
+        meta.append("task=" + ",".join(record["task_tags"]))
     if record["tool_tags"]:
-        meta.append("tool_tags=" + ",".join(record["tool_tags"]))
-    if record["visual_tags"]:
-        meta.append("visual_tags=" + ",".join(record["visual_tags"]))
-    if record["skill_ids"]:
-        meta.append("skill_ids=" + ",".join(record["skill_ids"]))
-    if record["failure_mode"]:
-        meta.append("failure_mode=" + str(record["failure_mode"]))
-    if record["action_policy"]:
-        meta.append("action_policy=" + ";".join(f"{k}:{v}" for k, v in record["action_policy"].items()))
-    return f"[{'; '.join(meta)}; confidence={record['confidence']:.2f}] {record['content']}"
+        meta.append("tool=" + ",".join(record["tool_tags"]))
+    parts = [f"[{'; '.join(meta)}] {record['content']}"]
+    if record.get("anti_pattern"):
+        parts.append(f"  Avoid: {record['anti_pattern']}")
+    if record.get("code_template"):
+        parts.append(f"  Code: {record['code_template']}")
+    return "\n".join(parts)

@@ -24,6 +24,7 @@ from .experience_utils import (
 )
 
 from .experience_schema import (
+    compact_experience_operation,
     get_experience_content,
     normalize_experience_operation,
     normalize_experience_record,
@@ -35,8 +36,8 @@ from .multi_skill import (
     collect_linked_experiences,
     format_selected_skills_for_prompt,
     load_skill_index,
-    rerank_experiences_for_skills,
-    select_skills_for_task,
+    rerank_memory_with_llm,
+    retrieve_skills_for_task,
     skill_index_path,
     update_memory_usage_after_sample,
 )
@@ -64,6 +65,7 @@ __all__ = [
     "save_library",
     "load_experiences",
     "format_for_prompt",
+    "compact_experience_operation",
     "get_experience_content",
     "normalize_experience_operation",
     "normalize_experience_record",
@@ -71,8 +73,8 @@ __all__ = [
     "collect_linked_experiences",
     "format_selected_skills_for_prompt",
     "load_skill_index",
-    "rerank_experiences_for_skills",
-    "select_skills_for_task",
+    "rerank_memory_with_llm",
+    "retrieve_skills_for_task",
     "skill_index_path",
     "update_memory_usage_after_sample",
     "generate_skill_for_sample",

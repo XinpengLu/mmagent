@@ -196,10 +196,13 @@ def create_model_caller(args, sampling_params, save_dir=None):
             
             # Update the node with the response
             if is_tool_call_response:
-                first_tool_call_only = [tool_calls_list[0]] if tool_calls_list else []
+                first_tool_call_only = [dict(tool_calls_list[0])] if tool_calls_list else []
+                if first_tool_call_only and not first_tool_call_only[0].get("id"):
+                    turn_offset = getattr(node, 'turn_offset', 0)
+                    first_tool_call_only[0]["id"] = f"call_{turn_offset + node.current_turn}"
                 assistant_msg = {
-                    "role": "assistant", 
-                    "content": response_text, 
+                    "role": "assistant",
+                    "content": response_text,
                     "tool_calls": first_tool_call_only
                 }
                 # Preserve reasoning_details for OpenRouter Gemini models (CRITICAL for thought_signature)
