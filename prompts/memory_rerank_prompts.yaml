@@ -1,0 +1,40 @@
+memory_rerank: |
+  You are selecting memory for a multimodal tool-using agent.
+
+  Task:
+  {query}
+
+  Candidate skills:
+  {skills}
+
+  Candidate experiences:
+  {experiences}
+
+  Select only memory that is directly useful for this task.
+  If the Task section includes metadata such as data_source, category, domain, subtask, or difficulty, use it as a soft constraint:
+  prefer memories with matching metadata and be conservative with candidates from a conflicting category/domain unless the tool policy is clearly transferable.
+  Prefer executable tool policies, concrete validation checks, and failure-prevention rules.
+  When a directly relevant success experience and a failure experience are both available, include the success experience unless it has poor validation quality; use the failure memory only as a guardrail.
+  Drop memories that are merely semantically similar but not useful.
+  Do not select memories whose validation_quality or validation_average_score is low unless no better memory exists and the memory only provides a warning, not an action plan.
+  Prefer a smaller set of high-quality memories over many weak memories.
+  Prefer `action_skill` candidates over `failure_guardrail` candidates when both are relevant.
+  Treat low validation_quality or repeated validation failures as evidence to be conservative.
+  If a `candidate_unverified` recovery skill has `pending_validation_revision=true`, you may select it to test the revised policy.
+  Otherwise select a `candidate_unverified` recovery skill only when no validated action/recovery skill matches the same concrete operation; do not select it as generic background.
+  You may return empty arrays if all candidates are weakly related.
+  Prefer no memory over a broad generic memory that only says to inspect or validate without matching the task's concrete operation.
+  Select a skill only when its task tags, tool policy, or failure mode match a concrete step needed by the current task.
+  Select a `failure_guardrail` only when it prevents a concrete likely mistake in the current task; do not use it as a full recipe unless it contains a tool-backed check.
+  Do not select generic visual-validation memory unless the task clearly requires measurement, localization, counting, geometry, external lookup, or another concrete tool-aided operation.
+
+  Return ONLY valid JSON:
+  {{
+    "skill_ids": ["skill_id_1"],
+    "experience_ids": ["E1", "E2"],
+    "notes": "brief reason"
+  }}
+
+  Limits:
+  - Select at most {max_skills} skills.
+  - Select at most {max_experiences} experiences.

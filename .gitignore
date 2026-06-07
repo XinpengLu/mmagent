@@ -4,7 +4,11 @@ memory_bank/
 benchmark/
 benchmark_full/
 .env
-.env.local
+.env.*
+!*.env.example
+configs/runtime.local.yaml
+configs/runtime.local.yml
+configs/runtime.local.toml
 xskill_paper_tmp.txt
 
 # Python cache files
