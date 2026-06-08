@@ -1,0 +1,246 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2200 1500" role="img" aria-labelledby="title desc">
+  <title id="title">XSkill / mmagent complete train validation test pipeline</title>
+  <desc id="desc">A complete pipeline diagram showing configuration, train rollouts, experience generation, skill abstraction, memory validation, best memory selection, and test-time retrieval with tool plans.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#30445f"/>
+    </marker>
+    <marker id="arrow-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#0f766e"/>
+    </marker>
+    <marker id="arrow-gold" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#b58105"/>
+    </marker>
+    <marker id="arrow-coral" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c94f3d"/>
+    </marker>
+    <style>
+      .bg { fill: #f6f8fb; }
+      .panel { fill: #ffffff; stroke: #d7dee9; stroke-width: 2; }
+      .train { fill: #e7f6f3; stroke: #8bd4c9; }
+      .memory { fill: #edf4ff; stroke: #adc4e5; }
+      .val { fill: #fff7df; stroke: #e6c76f; }
+      .test { fill: #fff0ec; stroke: #edb1a4; }
+      .gray { fill: #f8fafc; stroke: #cbd5e1; }
+      .dark { fill: #172033; }
+      .muted { fill: #5f6c7d; }
+      .teal-text { fill: #0f766e; }
+      .blue-text { fill: #24466f; }
+      .gold-text { fill: #8a6500; }
+      .coral-text { fill: #b33e2f; }
+      .title { font: 700 44px Arial, sans-serif; fill: #172033; }
+      .subtitle { font: 400 22px Arial, sans-serif; fill: #5f6c7d; }
+      .band { font: 700 24px Arial, sans-serif; letter-spacing: 0; }
+      .h { font: 700 24px Arial, sans-serif; fill: #172033; }
+      .b { font: 700 17px Arial, sans-serif; fill: #172033; }
+      .t { font: 400 17px Arial, sans-serif; fill: #26364a; }
+      .s { font: 400 14px Arial, sans-serif; fill: #5f6c7d; }
+      .code { font: 700 14px Consolas, monospace; fill: #31445d; }
+      .arrow { fill: none; stroke: #30445f; stroke-width: 3; marker-end: url(#arrow); }
+      .arrow-teal { fill: none; stroke: #0f766e; stroke-width: 3; marker-end: url(#arrow-teal); }
+      .arrow-gold { fill: none; stroke: #b58105; stroke-width: 3; marker-end: url(#arrow-gold); }
+      .arrow-coral { fill: none; stroke: #c94f3d; stroke-width: 3; marker-end: url(#arrow-coral); }
+      .dash { stroke-dasharray: 10 8; }
+      .chip { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; }
+      .shadow { filter: drop-shadow(0 10px 18px rgba(15, 23, 42, 0.08)); }
+    </style>
+  </defs>
+
+  <rect class="bg" width="2200" height="1500"/>
+  <text class="title" x="70" y="74">XSkill / mmagent Complete Train-Val-Test Pipeline</text>
+  <text class="subtitle" x="70" y="110">How valid rollouts become experiences, how experiences become skills, how validation calibrates memory, and how test-time prompts reuse the best memory.</text>
+
+  <rect class="panel shadow" x="54" y="145" width="2088" height="1310" rx="24"/>
+
+  <rect class="train" x="88" y="188" width="690" height="540" rx="18"/>
+  <text class="band teal-text" x="116" y="226">TRAIN: collect valid evidence and build memory</text>
+
+  <rect class="val" x="808" y="188" width="615" height="540" rx="18"/>
+  <text class="band gold-text" x="836" y="226">VALIDATION: score, reflect, and select memory</text>
+
+  <rect class="test" x="1452" y="188" width="600" height="540" rx="18"/>
+  <text class="band coral-text" x="1480" y="226">TEST: retrieve, rerank, plan, and execute</text>
+
+  <rect class="memory" x="195" y="805" width="1660" height="375" rx="22"/>
+  <text class="band blue-text" x="226" y="846">Shared Memory Bank: experiences.json + skill_library.anchor + skill_index.json + skills/*.md</text>
+  <text class="s" x="226" y="875">Train writes memory. Validation updates usage and recovery status on an isolated snapshot. Test reads the selected best memory without mutating it.</text>
+
+  <rect class="gray" x="245" y="1265" width="1510" height="105" rx="18"/>
+  <text class="band" x="278" y="1304" fill="#30445f">Artifacts and observability</text>
+  <text class="t" x="278" y="1338">rollout_i/traj.jsonl, metrics.json, injected_system_prompt.txt  |  sample/tt_memory_usage.json, exp_items.json  |  val_stage_i/feedback.json, reflection.json, metrics_at_k.json  |  analysis/metrics and figures</text>
+
+  <!-- Train boxes -->
+  <rect class="panel shadow" x="118" y="268" width="180" height="165" rx="14"/>
+  <text class="h" x="138" y="304">1. Config</text>
+  <text class="code" x="138" y="334">runtime.yaml</text>
+  <text class="code" x="138" y="359">tool_configs.yaml</text>
+  <text class="code" x="138" y="384">split/stages.json</text>
+  <text class="s" x="138" y="413">mode, benchmark, k</text>
+
+  <rect class="panel shadow" x="330" y="268" width="210" height="165" rx="14"/>
+  <text class="h" x="350" y="304">2. Phase</text>
+  <text class="code" x="350" y="334">main_flow/main.py</text>
+  <text class="code" x="350" y="359">phase.py</text>
+  <text class="s" x="350" y="389">train / val / test</text>
+  <text class="s" x="350" y="413">one benchmark phase</text>
+
+  <rect class="panel shadow" x="572" y="268" width="205" height="250" rx="14"/>
+  <text class="h" x="592" y="304">3. Rollouts</text>
+  <text class="code" x="592" y="334">rollout_runner.py</text>
+  <text class="code" x="592" y="359">engine/api_processors.py</text>
+  <text class="t" x="592" y="394">keep N effective</text>
+  <text class="t" x="592" y="420">rollouts per sample</text>
+  <text class="s" x="592" y="453">discard transient API,</text>
+  <text class="s" x="592" y="474">empty response, kernel died</text>
+  <text class="s" x="592" y="499">then retry within limit</text>
+
+  <rect class="panel shadow" x="192" y="500" width="280" height="176" rx="14"/>
+  <text class="h" x="214" y="536">4. Experience ops</text>
+  <text class="code" x="214" y="566">experience/pipeline.py</text>
+  <text class="code" x="214" y="591">trajectory_summary.py</text>
+  <text class="code" x="214" y="616">critique.py</text>
+  <text class="s" x="214" y="647">LLM summarizes valid trajectories</text>
+
+  <rect class="panel shadow" x="508" y="560" width="222" height="156" rx="14"/>
+  <text class="h" x="528" y="596">5. Merge</text>
+  <text class="code" x="528" y="626">experience/library.py</text>
+  <text class="s" x="528" y="657">append / refine / score</text>
+  <text class="s" x="528" y="682">write experiences.json</text>
+
+  <!-- Validation boxes -->
+  <rect class="panel shadow" x="838" y="268" width="245" height="168" rx="14"/>
+  <text class="h" x="858" y="304">7. Isolated val copy</text>
+  <text class="code" x="858" y="334">validation.py</text>
+  <text class="code" x="858" y="359">run_phase(val)</text>
+  <text class="s" x="858" y="391">retrieve memory during val</text>
+  <text class="s" x="858" y="416">record usage per sample</text>
+
+  <rect class="panel shadow" x="1115" y="268" width="255" height="168" rx="14"/>
+  <text class="h" x="1135" y="304">8. Feedback</text>
+  <text class="code" x="1135" y="334">validation_memory.py</text>
+  <text class="s" x="1135" y="366">update pass_rate, avg_score</text>
+  <text class="s" x="1135" y="391">promote candidate recovery</text>
+  <text class="s" x="1135" y="416">reject weak memory</text>
+
+  <rect class="panel shadow" x="842" y="500" width="260" height="176" rx="14"/>
+  <text class="h" x="862" y="536">9. Reflection</text>
+  <text class="code" x="862" y="566">validation_reflection.py</text>
+  <text class="s" x="862" y="596">optional low-score val cases</text>
+  <text class="s" x="862" y="621">+ used memory + GT</text>
+  <text class="s" x="862" y="646">generate repair candidates</text>
+
+  <rect class="panel shadow" x="1140" y="500" width="245" height="176" rx="14"/>
+  <text class="h" x="1160" y="536">10. Select best</text>
+  <text class="code" x="1160" y="566">select_best()</text>
+  <text class="code" x="1160" y="591">validation_history.jsonl</text>
+  <text class="s" x="1160" y="623">best_validation_memory.json</text>
+  <text class="s" x="1160" y="648">snapshot for test</text>
+
+  <!-- Test boxes -->
+  <rect class="panel shadow" x="1484" y="268" width="240" height="168" rx="14"/>
+  <text class="h" x="1504" y="304">11. Build query</text>
+  <text class="code" x="1504" y="334">main_flow/memory.py</text>
+  <text class="s" x="1504" y="366">question + image context</text>
+  <text class="s" x="1504" y="391">metadata + task hints</text>
+  <text class="s" x="1504" y="416">no memory mutation</text>
+
+  <rect class="panel shadow" x="1758" y="268" width="245" height="168" rx="14"/>
+  <text class="h" x="1778" y="304">12. Retrieve + rerank</text>
+  <text class="code" x="1778" y="334">experience/retriever.py</text>
+  <text class="code" x="1778" y="359">skill/retriever.py</text>
+  <text class="code" x="1778" y="384">skill/reranker.py</text>
+  <text class="s" x="1778" y="416">embed, filter, LLM rerank</text>
+
+  <rect class="panel shadow" x="1484" y="500" width="240" height="176" rx="14"/>
+  <text class="h" x="1504" y="536">13. Tool plan</text>
+  <text class="code" x="1504" y="566">skill/tool_plan.py</text>
+  <text class="s" x="1504" y="596">selected skills + experiences</text>
+  <text class="s" x="1504" y="621">mandatory callable tools</text>
+  <text class="s" x="1504" y="646">anti-guess checks</text>
+
+  <rect class="panel shadow" x="1758" y="500" width="245" height="176" rx="14"/>
+  <text class="h" x="1778" y="536">14. Test rollout</text>
+  <text class="code" x="1778" y="566">run_phase(test)</text>
+  <text class="s" x="1778" y="596">inject prompt context</text>
+  <text class="s" x="1778" y="621">execute tools and answer</text>
+  <text class="s" x="1778" y="646">write final metrics</text>
+
+  <!-- Memory internals -->
+  <rect class="chip" x="235" y="915" width="330" height="120" rx="12"/>
+  <text class="b" x="258" y="951">Experience record</text>
+  <text class="s" x="258" y="978">kind, task_tags, tool_tags, confidence</text>
+  <text class="s" x="258" y="1003">tool_sequence, code_template, checks</text>
+  <text class="s" x="258" y="1028">validation stats, recovery_status</text>
+
+  <rect class="chip" x="610" y="915" width="330" height="120" rx="12"/>
+  <text class="b" x="633" y="951">Recovery synthesis</text>
+  <text class="s" x="633" y="978">failure with actionable evidence</text>
+  <text class="s" x="633" y="1003">+ nearby success prior</text>
+  <text class="s" x="633" y="1028">candidate_unverified until val</text>
+
+  <rect class="chip" x="985" y="915" width="330" height="120" rx="12"/>
+  <text class="b" x="1008" y="951">Skill abstraction</text>
+  <text class="code" x="1008" y="978">skill/generation.py</text>
+  <text class="s" x="1008" y="1003">cluster experiences by task/tool evidence</text>
+  <text class="s" x="1008" y="1028">link via linked_experience_ids</text>
+
+  <rect class="chip" x="1360" y="915" width="330" height="120" rx="12"/>
+  <text class="b" x="1383" y="951">Inference filters</text>
+  <text class="s" x="1383" y="978">disabled/rejected removed</text>
+  <text class="s" x="1383" y="1003">low-quality memory down-weighted</text>
+  <text class="s" x="1383" y="1028">validated policy preferred</text>
+
+  <rect class="chip" x="480" y="1075" width="330" height="82" rx="12"/>
+  <text class="b" x="503" y="1110">Scores</text>
+  <text class="s" x="503" y="1136">confidence, support_count, selection_weight</text>
+
+  <rect class="chip" x="865" y="1075" width="330" height="82" rx="12"/>
+  <text class="b" x="888" y="1110">Validation signal</text>
+  <text class="s" x="888" y="1136">validation_average_score, pass_rate, uses</text>
+
+  <rect class="chip" x="1250" y="1075" width="330" height="82" rx="12"/>
+  <text class="b" x="1273" y="1110">Prompt injection</text>
+  <text class="s" x="1273" y="1136">skill text + examples + executable tool plan</text>
+
+  <!-- Arrows train -->
+  <path class="arrow-teal" d="M298 350 L330 350"/>
+  <path class="arrow-teal" d="M540 350 L572 350"/>
+  <path class="arrow-teal" d="M675 518 C675 550 590 555 508 590"/>
+  <path class="arrow-teal" d="M472 590 L508 626"/>
+  <path class="arrow-teal" d="M620 716 C620 770 420 800 400 913"/>
+  <path class="arrow-teal" d="M655 716 C690 800 760 845 770 912"/>
+
+  <!-- Memory arrows -->
+  <path class="arrow" d="M565 975 L610 975"/>
+  <path class="arrow" d="M940 975 L985 975"/>
+  <path class="arrow" d="M1315 975 L1360 975"/>
+  <path class="arrow" d="M1150 915 C1125 815 1180 735 1225 676"/>
+  <path class="arrow-gold dash" d="M1244 436 C1250 465 1260 485 1260 500"/>
+  <path class="arrow-gold" d="M1102 588 L1140 588"/>
+  <path class="arrow-gold" d="M1228 500 C1210 470 1215 452 1225 436"/>
+  <path class="arrow-gold" d="M1230 676 C1240 760 1375 805 1525 913"/>
+  <path class="arrow-gold" d="M1385 588 C1440 588 1445 352 1484 352"/>
+
+  <!-- Test arrows -->
+  <path class="arrow-coral" d="M1724 352 L1758 352"/>
+  <path class="arrow-coral" d="M1880 436 C1880 485 1645 485 1608 500"/>
+  <path class="arrow-coral" d="M1724 588 L1758 588"/>
+  <path class="arrow-coral" d="M1525 1035 C1510 900 1532 748 1580 676"/>
+  <path class="arrow-coral" d="M1415 1075 C1410 800 1500 725 1585 676"/>
+
+  <!-- Cross-phase top arrows -->
+  <path class="arrow" d="M777 350 C805 350 815 350 838 350"/>
+  <path class="arrow" d="M1370 350 C1410 350 1440 350 1484 350"/>
+
+  <!-- Legend -->
+  <rect class="chip" x="1780" y="1320" width="40" height="22" rx="5" fill="#e7f6f3"/>
+  <text class="s" x="1832" y="1337">train-time construction</text>
+  <rect class="chip" x="1780" y="1354" width="40" height="22" rx="5" fill="#fff7df"/>
+  <text class="s" x="1832" y="1371">validation calibration</text>
+  <rect class="chip" x="1780" y="1388" width="40" height="22" rx="5" fill="#fff0ec"/>
+  <text class="s" x="1832" y="1405">test-time inference</text>
+
+  <text class="s" x="116" y="705">Train builds reusable memory from effective rollouts, not from transient infrastructure failures.</text>
+  <text class="s" x="836" y="705">Validation does not just report metrics; it calibrates memory and optionally writes repair candidates.</text>
+  <text class="s" x="1480" y="705">Test-time uses the selected best memory as prompt context and mandatory tool-use policy.</text>
+</svg>

@@ -1,0 +1,835 @@
+{
+  "project": {
+    "name": "mmagent",
+    "languages": [
+      "json",
+      "python",
+      "yaml",
+      "markdown",
+      "txt",
+      "shell"
+    ],
+    "frameworks": [
+      "Python",
+      "OpenAI-compatible API",
+      "Vite dashboard",
+      "Qwen-VL utilities"
+    ],
+    "description": "XSkill multimodal tool-using agent runner for train/validation/test, experience memory, skill memory, and benchmark reporting.",
+    "analyzedAt": "2026-06-08T06:04:33.757741Z",
+    "gitCommitHash": "16dd00ddc66240c30b2b7baf9c70f9b5616b74a9"
+  },
+  "nodes": [
+    {
+      "id": "runtime_config",
+      "name": "Runtime Config",
+      "type": "config",
+      "filePath": "configs/runtime.py",
+      "summary": "Loads runtime.yaml and optional .env, validates mode/env values, writes paths/API/model settings into os.environ.",
+      "tags": [
+        "configuration"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "runtime_yaml",
+      "name": "runtime.yaml",
+      "type": "config",
+      "filePath": "configs/runtime.yaml",
+      "summary": "Single experiment control file for mode, benchmarks, paths, API endpoints, retry limits, rollout counts, validation flags, and experience/skill settings.",
+      "tags": [
+        "configuration"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "main_entry",
+      "name": "main_flow.main",
+      "type": "module",
+      "filePath": "main_flow/main.py",
+      "summary": "Top-level train/val/test entry. Loads runtime config, builds shared context, then dispatches each benchmark to phase or staged validation.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "context",
+      "name": "MainFlowContext",
+      "type": "module",
+      "filePath": "main_flow/context.py",
+      "summary": "Resolves project-local benchmark, split, output, log, and prompt/tool defaults.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "phase",
+      "name": "run_phase",
+      "type": "module",
+      "filePath": "main_flow/phase.py",
+      "summary": "Builds one train/val/test phase: paths, memory root, execution args, environment patching, logging, inference, metrics, and health check.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "experiment_config",
+      "name": "ExperimentConfig",
+      "type": "module",
+      "filePath": "main_flow/config.py",
+      "summary": "Loads prompts, tool configs, data split, model name, sampling params, and experience batching rules for a phase.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "rollout_runner",
+      "name": "RolloutRunner",
+      "type": "module",
+      "filePath": "main_flow/rollout_runner.py",
+      "summary": "Schedules sample rollouts, supports parallel multi-rollout execution, resumes valid completed rollouts, discards transient failures, and triggers train-time memory updates.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "memory_runtime",
+      "name": "MemoryRuntime",
+      "type": "class",
+      "filePath": "main_flow/rollout_runner.py",
+      "summary": "Owns mutable memory prompt/retriever state during a phase and reloads memory after training updates.",
+      "tags": [
+        "python",
+        "class"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "memory_retrieval",
+      "name": "memory retrieval and injection",
+      "type": "module",
+      "filePath": "main_flow/memory.py",
+      "summary": "Builds sample query, retrieves direct experiences and modular skills, reranks memory, filters low-quality items, builds mandatory tool plan, injects skills/experiences into the system prompt, and logs memory usage.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "api_processors",
+      "name": "API rollout processor",
+      "type": "module",
+      "filePath": "engine/api_processors.py",
+      "summary": "Runs one multimodal agent rollout: loads images, calls model/tool loop, enforces required tool plan, synthesizes final answer when needed, evaluates, and saves rollout artifacts.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "api_model_caller",
+      "name": "model/tool caller",
+      "type": "module",
+      "filePath": "engine/api_model_caller.py",
+      "summary": "Creates model caller state and bridges tool/function-call responses to tool execution.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "api_caller",
+      "name": "API caller",
+      "type": "module",
+      "filePath": "engine/api_caller.py",
+      "summary": "OpenAI-compatible chat completion caller with bounded retries and transient failure handling.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "tools",
+      "name": "tool registry and tools",
+      "type": "module",
+      "filePath": "tools/",
+      "summary": "Callable agent tools including web_search, image_search, visit, zoom, and code_interpreter.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "memory_update",
+      "name": "TrainingMemoryUpdater",
+      "type": "module",
+      "filePath": "main_flow/memory_update.py",
+      "summary": "Collects completed training samples by large batch, snapshots memory, generates experience ops, merges the experience library, clusters skills, and reloads retriever/prompt state.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "experience_pipeline",
+      "name": "experience generation pipeline",
+      "type": "module",
+      "filePath": "experience/pipeline.py",
+      "summary": "Summarizes rollouts, runs LLM critique, normalizes success/failure/recovery experience operations, auto-adds tool-backed success memories, and writes per-sample exp_items.json.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "trajectory_summary",
+      "name": "trajectory summary",
+      "type": "module",
+      "filePath": "experience/trajectory_summary.py",
+      "summary": "Converts multi-rollout trajectory JSONL plus optional image captions into compact evidence summaries for critique.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "experience_critique",
+      "name": "experience critique",
+      "type": "module",
+      "filePath": "experience/critique.py",
+      "summary": "Prompts the LLM to extract intra-sample experiences and supervised recovery candidates from rollout summaries.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "experience_library",
+      "name": "experience library",
+      "type": "module",
+      "filePath": "experience/library.py",
+      "summary": "Merges, deduplicates, prunes, and refines normalized experience records stored as experiences.json.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "experience_retriever",
+      "name": "ExperienceRetriever",
+      "type": "module",
+      "filePath": "experience/retriever.py",
+      "summary": "Embeds experience content, caches embeddings, retrieves by similarity, optionally decomposes tasks and rewrites experiences for a sample.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "experience_schema",
+      "name": "experience schema",
+      "type": "module",
+      "filePath": "experience/schema.py",
+      "summary": "Normalizes experience records and formats them for prompt injection.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "skill_generation",
+      "name": "skill generation",
+      "type": "module",
+      "filePath": "skill/generation.py",
+      "summary": "Clusters normalized experiences by tags/content, builds action skills, recovery skills, and failure guardrails, preserves validation metadata, and writes skill markdown/index files.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "skill_retriever",
+      "name": "skill retriever",
+      "type": "module",
+      "filePath": "skill/retriever.py",
+      "summary": "Retrieves modular skill candidates by embedding plus metadata filters and adds limited validation/recovery probe candidates when enabled.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "skill_reranker",
+      "name": "skill-memory reranker",
+      "type": "module",
+      "filePath": "skill/reranker.py",
+      "summary": "Uses LLM reranking to choose final skills and linked/direct experiences for prompt injection.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "tool_plan",
+      "name": "tool plan",
+      "type": "module",
+      "filePath": "skill/tool_plan.py",
+      "summary": "Formats executable mandatory tool plans from selected skills and linked experiences.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "validation",
+      "name": "staged validation",
+      "type": "module",
+      "filePath": "main_flow/validation.py",
+      "summary": "Runs train stages from fixed split manifest, evaluates isolated validation memory snapshots, applies feedback/reflection, records history, and selects best memory.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "validation_memory",
+      "name": "validation feedback",
+      "type": "module",
+      "filePath": "main_flow/validation_memory.py",
+      "summary": "Applies validation metrics to experience/skill status, calibration, and best-memory selection.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "validation_reflection",
+      "name": "validation reflection",
+      "type": "module",
+      "filePath": "main_flow/validation_reflection.py",
+      "summary": "Optionally reflects on validation failures and writes recovery/correction experiences.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "metrics",
+      "name": "metrics",
+      "type": "module",
+      "filePath": "main_flow/metrics.py",
+      "summary": "Writes rollout results, sample summary, dataset pass@k/average@k, and diagnostic metrics.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "validation_reporting",
+      "name": "validation reporting",
+      "type": "module",
+      "filePath": "validation_tools/reporting.py",
+      "summary": "Aggregates validation history and writes analysis metrics/figures.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "artifacts",
+      "name": "artifact utilities",
+      "type": "module",
+      "filePath": "utils/artifacts.py",
+      "summary": "Central filenames and JSON/JSONL artifact helpers used across rollout, retrieval, metrics, and validation.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "prompts",
+      "name": "prompt templates",
+      "type": "module",
+      "filePath": "prompts/",
+      "summary": "System, experience generation, retrieval, skill generation, skill injection, judge, and recovery prompt templates.",
+      "tags": [
+        "python",
+        "module"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "runtime_yaml",
+      "target": "runtime_config",
+      "type": "configures",
+      "description": "YAML values are loaded and exported to os.environ.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "runtime_config",
+      "target": "main_entry",
+      "type": "configures",
+      "description": "main() loads RuntimeConfig before dispatch.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "main_entry",
+      "target": "context",
+      "type": "calls",
+      "description": "build_context resolves roots and defaults.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "main_entry",
+      "target": "phase",
+      "type": "calls",
+      "description": "Direct train/val/test phases run through run_phase.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "main_entry",
+      "target": "validation",
+      "type": "calls",
+      "description": "When validation is enabled for train modes, staged validation controls the loop.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "phase",
+      "target": "experiment_config",
+      "type": "calls",
+      "description": "Phase builds SimpleNamespace args then loads prompts/tools/data/sampling.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "phase",
+      "target": "memory_runtime",
+      "type": "calls",
+      "description": "Initializes full injection or retrieval-mode memory.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "phase",
+      "target": "rollout_runner",
+      "type": "calls",
+      "description": "Runs all sample rollouts for a phase.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "phase",
+      "target": "metrics",
+      "type": "calls",
+      "description": "Saves rollout outputs and aggregate metrics after inference.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "rollout_runner",
+      "target": "memory_retrieval",
+      "type": "calls",
+      "description": "Retrieval happens before rollout for each sample or in pipeline-parallel mode.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "memory_retrieval",
+      "target": "experience_retriever",
+      "type": "calls",
+      "description": "Retrieves direct experience candidates.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "memory_retrieval",
+      "target": "skill_retriever",
+      "type": "calls",
+      "description": "Retrieves modular skill candidates.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "memory_retrieval",
+      "target": "skill_reranker",
+      "type": "calls",
+      "description": "LLM chooses final skill/experience set.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "memory_retrieval",
+      "target": "tool_plan",
+      "type": "calls",
+      "description": "Builds executable mandatory tool plan injected into prompt.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "memory_retrieval",
+      "target": "artifacts",
+      "type": "writes_to",
+      "description": "Writes retrieval_info.txt and memory_usage.json.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "rollout_runner",
+      "target": "api_processors",
+      "type": "calls",
+      "description": "Each valid rollout runs through process_single_sample.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "api_processors",
+      "target": "api_model_caller",
+      "type": "calls",
+      "description": "Creates the model caller and parses function-call responses.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "api_processors",
+      "target": "api_caller",
+      "type": "calls",
+      "description": "Uses OpenAI-compatible chat completion for final synthesis and model calls.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "api_model_caller",
+      "target": "tools",
+      "type": "calls",
+      "description": "Executes registered tools requested by the model.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "api_processors",
+      "target": "metrics",
+      "type": "writes_to",
+      "description": "Rollout result contains accuracy/runtime/token/tool-call metrics.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "rollout_runner",
+      "target": "memory_update",
+      "type": "calls",
+      "description": "Training mode flushes completed sample batches into memory generation.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "memory_update",
+      "target": "experience_pipeline",
+      "type": "calls",
+      "description": "Generates experience ops from completed sample rollouts.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "experience_pipeline",
+      "target": "trajectory_summary",
+      "type": "calls",
+      "description": "Summarizes trajectory JSONL before critique.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "experience_pipeline",
+      "target": "experience_critique",
+      "type": "calls",
+      "description": "Extracts success/failure/correction experience ops.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "experience_pipeline",
+      "target": "experience_schema",
+      "type": "calls",
+      "description": "Normalizes LLM-produced experience operations.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "memory_update",
+      "target": "experience_library",
+      "type": "calls",
+      "description": "Merges generated ops into experiences.json.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "memory_update",
+      "target": "skill_generation",
+      "type": "calls",
+      "description": "Clusters experiences into skills after merge.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "skill_generation",
+      "target": "experience_library",
+      "type": "writes_to",
+      "description": "Skill clustering may update normalized experience metadata.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "skill_generation",
+      "target": "experience_retriever",
+      "type": "depends_on",
+      "description": "Uses content embeddings when available; otherwise falls back to tag clustering.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "validation",
+      "target": "phase",
+      "type": "calls",
+      "description": "Each stage first calls train phase then val phase.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "validation",
+      "target": "validation_memory",
+      "type": "calls",
+      "description": "Applies feedback, calibration, and selection.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "validation",
+      "target": "validation_reflection",
+      "type": "calls",
+      "description": "Optional LLM reflection on validation failures.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "validation",
+      "target": "validation_reporting",
+      "type": "calls",
+      "description": "Writes analysis metrics and validation figures after staged validation.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "validation_memory",
+      "target": "experience_library",
+      "type": "writes_to",
+      "description": "Updates validation quality/status metadata in memory.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "validation_reflection",
+      "target": "skill_generation",
+      "type": "calls",
+      "description": "Reflection write-back can trigger skill rebuild.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "prompts",
+      "target": "experiment_config",
+      "type": "configures",
+      "description": "Base system prompts are loaded per benchmark/tool setup.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "prompts",
+      "target": "experience_pipeline",
+      "type": "configures",
+      "description": "Experience critique/generation prompts drive memory extraction.",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "prompts",
+      "target": "skill_generation",
+      "type": "configures",
+      "description": "Skill templates produce action/recovery/guardrail markdown.",
+      "direction": "forward",
+      "weight": 0.8
+    }
+  ],
+  "layers": [
+    {
+      "id": "configuration",
+      "name": "Configuration",
+      "description": "Configuration related modules.",
+      "nodeIds": [
+        "runtime_yaml",
+        "runtime_config",
+        "context"
+      ]
+    },
+    {
+      "id": "orchestration",
+      "name": "Main Flow Orchestration",
+      "description": "Main Flow Orchestration related modules.",
+      "nodeIds": [
+        "main_entry",
+        "phase",
+        "validation"
+      ]
+    },
+    {
+      "id": "rollout",
+      "name": "Rollout Execution",
+      "description": "Rollout Execution related modules.",
+      "nodeIds": [
+        "experiment_config",
+        "rollout_runner",
+        "memory_runtime",
+        "api_processors",
+        "api_model_caller",
+        "api_caller",
+        "tools"
+      ]
+    },
+    {
+      "id": "memory",
+      "name": "Experience and Skill Memory",
+      "description": "Experience and Skill Memory related modules.",
+      "nodeIds": [
+        "memory_retrieval",
+        "memory_update",
+        "experience_pipeline",
+        "experience_library",
+        "experience_retriever",
+        "skill_generation",
+        "skill_retriever",
+        "skill_reranker",
+        "tool_plan"
+      ]
+    },
+    {
+      "id": "evaluation",
+      "name": "Metrics and Validation",
+      "description": "Metrics and Validation related modules.",
+      "nodeIds": [
+        "metrics",
+        "validation_memory",
+        "validation_reflection",
+        "validation_reporting"
+      ]
+    },
+    {
+      "id": "shared",
+      "name": "Shared Utilities and Prompts",
+      "description": "Shared Utilities and Prompts related modules.",
+      "nodeIds": [
+        "experience_schema",
+        "trajectory_summary",
+        "experience_critique",
+        "artifacts",
+        "prompts"
+      ]
+    }
+  ],
+  "tour": [
+    {
+      "order": 1,
+      "title": "Start at runtime",
+      "description": "Read configs/runtime.yaml first, then configs/runtime.py. This explains which environment values every downstream module expects.",
+      "nodeIds": [
+        "runtime_config"
+      ]
+    },
+    {
+      "order": 2,
+      "title": "Follow the dispatcher",
+      "description": "main_flow/main.py chooses direct phase execution or staged train-validation.",
+      "nodeIds": [
+        "main_entry"
+      ]
+    },
+    {
+      "order": 3,
+      "title": "Understand one phase",
+      "description": "main_flow/phase.py is the best mental anchor: it resolves paths, memory, args, logging, rollout execution, metrics, and health checks.",
+      "nodeIds": [
+        "phase"
+      ]
+    },
+    {
+      "order": 4,
+      "title": "Read rollout scheduling",
+      "description": "main_flow/rollout_runner.py explains skip/resume, valid-rollout retry, parallel scheduling, and when training samples are sent to memory generation.",
+      "nodeIds": [
+        "rollout_runner"
+      ]
+    },
+    {
+      "order": 5,
+      "title": "Read sample-level memory injection",
+      "description": "main_flow/memory.py shows how experience retrieval, skill retrieval, reranking, quality filtering, and mandatory tool plans become a dynamic system prompt.",
+      "nodeIds": [
+        "memory_retrieval"
+      ]
+    },
+    {
+      "order": 6,
+      "title": "Read train-time memory construction",
+      "description": "experience/pipeline.py and main_flow/memory_update.py turn completed rollouts into normalized experiences and then into modular skills.",
+      "nodeIds": [
+        "experience_pipeline"
+      ]
+    },
+    {
+      "order": 7,
+      "title": "Read staged validation last",
+      "description": "main_flow/validation.py explains why validation snapshots exist and how feedback selects the best memory.",
+      "nodeIds": [
+        "validation"
+      ]
+    }
+  ],
+  "version": "1.0.0",
+  "kind": "codebase"
+}

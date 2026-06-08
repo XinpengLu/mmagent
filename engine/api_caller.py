@@ -13,8 +13,6 @@ NON_RETRYABLE_STATUS_CODES = {400, 401, 403, 404}
 API_TIMEOUT = 240
 BASE_WAIT_TIME = env_float("REASONING_API_BASE_WAIT", 1.0)
 MAX_WAIT_TIME = env_float("REASONING_API_MAX_WAIT", 30.0)
-ROUND_ROBIN_429_WAIT_MIN = 5.0
-ROUND_ROBIN_429_WAIT_MAX = 10.0
 HIGH_TOKEN_THRESHOLD = 25000
 DEFAULT_MAX_RETRIES = max(1, env_int("REASONING_API_MAX_RETRIES", 3))
 
@@ -222,34 +220,6 @@ def _parse_api_response(response, api_name: str, attempt: int = 0, max_attempts:
         return _parse_choice_message(result, response, api_name, attempt, max_attempts)
     return _parse_empty_or_invalid_choices(result, api_name, attempt, max_attempts)
 
-def _try_single_attempt(api_key: str, end_point: str, model_name: str, messages: list, 
-                        sampling_params: dict, api_name: str = "API", tools: list = None):
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
-    
-    payload = _build_payload(model_name, messages, sampling_params, tools)
-    _add_reasoning_param(payload, model_name, end_point)
-    
-    response, request_error = _make_api_request(end_point, headers, payload, api_name)
-    
-    if request_error == "429" or (response and response.status_code == 429):
-        wait_time = ROUND_ROBIN_429_WAIT_MIN + random.uniform(0, ROUND_ROBIN_429_WAIT_MAX - ROUND_ROBIN_429_WAIT_MIN)
-        print(f"[{api_name}] API rate limit hit (429), waiting {wait_time:.2f} seconds before trying other API")
-        time.sleep(wait_time)
-        return (None, True, f"{api_name}: HTTP 429 (rate limit)")
-    
-    if request_error:
-        error_msg = f"{api_name}: {request_error}"
-        print(f"[{api_name}] Request failed: {request_error}")
-        return (None, False, error_msg)
-    
-    result, is_429, error_type = _parse_api_response(response, api_name, attempt=0, max_attempts=1)
-    
-    return (result, is_429, _api_error_info(response, api_name, error_type) if result is None else None)
-
-
 def _api_headers(api_key: str) -> dict:
     return {
         "Content-Type": "application/json",
@@ -331,72 +301,11 @@ def _api_configs():
     primary = {
         "api_key": os.environ.get("REASONING_API_KEY"),
         "end_point": os.environ.get("REASONING_END_POINT"),
-        "api_name": "Primary API",
+        "api_name": "Reasoning API",
     }
     if not all([primary["api_key"], primary["end_point"]]):
         raise ValueError("REASONING_API_KEY and REASONING_END_POINT must be set.")
-
-    fallback = {
-        "api_key": os.environ.get("REASONING_API_KEY_2"),
-        "end_point": os.environ.get("REASONING_END_POINT_2"),
-        "api_name": "Fallback API",
-    }
-    return primary, fallback if fallback["api_key"] and fallback["end_point"] else None
-
-
-def _attempt_config(config, model_name, messages, sampling_params, tools):
-    return _try_single_attempt(
-        config["api_key"],
-        config["end_point"],
-        model_name,
-        messages,
-        sampling_params,
-        api_name=config["api_name"],
-        tools=tools,
-    )
-
-
-def _round_robin_wait(is_429_1: bool, is_429_2: bool, consecutive_429_count: int, attempt: int, max_retries: int):
-    if is_429_1 and is_429_2:
-        consecutive_429_count += 1
-        wait_seconds = min(consecutive_429_count * 5, 15)
-        print(f"[API Round-Robin] Both APIs rate-limited (429), waiting {wait_seconds} seconds before next round")
-    else:
-        consecutive_429_count = 0
-        wait_seconds = 1
-
-    if attempt < max_retries - 1:
-        time.sleep(wait_seconds)
-    return consecutive_429_count
-
-
-def _call_round_robin_api(primary, fallback, model_name, messages, sampling_params, max_retries, tools):
-    print(f"[API Round-Robin] Starting round-robin polling with {max_retries} total attempts (shared between both APIs)")
-    consecutive_429_count = 0
-    all_errors = []
-
-    for attempt in range(max_retries):
-        result_1, is_429_1, error_1 = _attempt_config(primary, model_name, messages, sampling_params, tools)
-        if result_1 is not None:
-            return result_1
-        if error_1:
-            all_errors.append(f"Round {attempt + 1}: {error_1}")
-
-        result_2, is_429_2, error_2 = _attempt_config(fallback, model_name, messages, sampling_params, tools)
-        if result_2 is not None:
-            return result_2
-        if error_2:
-            all_errors.append(f"Round {attempt + 1}: {error_2}")
-
-        consecutive_429_count = _round_robin_wait(
-            is_429_1, is_429_2, consecutive_429_count, attempt, max_retries
-        )
-
-    error_summary = "All API attempts failed (both primary and fallback)"
-    if all_errors:
-        error_summary += f". Errors: {'; '.join(all_errors)}"
-    print(f"[API Round-Robin] {error_summary}")
-    return f"Error: {error_summary}"
+    return primary
 
 
 def _call_primary_api(primary, model_name, messages, sampling_params, max_retries, tools):
@@ -422,11 +331,9 @@ def _call_primary_api(primary, model_name, messages, sampling_params, max_retrie
 
 
 def call_vision_api(model_name: str, messages: list, sampling_params: dict, max_retries: int = None, tools: list = None):
-    """Call the reasoning API with bounded retries and optional fallback endpoint."""
+    """Call the reasoning API with bounded retries."""
     if max_retries is None:
         max_retries = DEFAULT_MAX_RETRIES
     max_retries = _max_retry_count(max_retries)
-    primary, fallback = _api_configs()
-    if fallback:
-        return _call_round_robin_api(primary, fallback, model_name, messages, sampling_params, max_retries, tools)
+    primary = _api_configs()
     return _call_primary_api(primary, model_name, messages, sampling_params, max_retries, tools)

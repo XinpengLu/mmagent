@@ -107,19 +107,12 @@ class RuntimePaths:
 
 
 @dataclass(frozen=True)
-class RuntimeApi:
-    openai_base_url: str
-    openai_chat_completions_url: str
-
-
-@dataclass(frozen=True)
 class RuntimeConfig:
     mode: str
     benchmarks: list[str]
     path: Path
     project_root: Path
     paths: RuntimePaths
-    api: RuntimeApi
     env: dict[str, str]
 
 
@@ -236,23 +229,24 @@ def _load_runtime_paths(root: Path, payload: dict[str, Any], source: Path) -> Ru
     )
 
 
-def _load_runtime_api(payload: dict[str, Any], source: Path) -> RuntimeApi:
-    api = _require_mapping(payload, "api", source)
-    env_base_url = os.environ.get("OPENAI_BASE_URL") or os.environ.get("OPENAI_API_BASE")
-    env_chat_url = os.environ.get("OPENAI_CHAT_COMPLETIONS_URL")
-    openai_base_url = str(env_base_url or api.get("openai_base_url") or "").rstrip("/")
-    if env_base_url and not env_chat_url:
-        chat_url = openai_base_url.rstrip("/") + "/chat/completions"
-    else:
-        chat_url = str(env_chat_url or api.get("openai_chat_completions_url") or "").rstrip("/")
-    if openai_base_url and not chat_url:
-        chat_url = openai_base_url.rstrip("/") + "/chat/completions"
-    if not openai_base_url or not chat_url:
+def _load_api_env(env_file: Path) -> tuple[str, str, str]:
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    base_url = (os.environ.get("OPENAI_BASE_URL") or os.environ.get("OPENAI_API_BASE") or "").rstrip("/")
+    chat_url = os.environ.get("OPENAI_CHAT_COMPLETIONS_URL", "").rstrip("/")
+    if base_url and not chat_url:
+        chat_url = f"{base_url}/chat/completions"
+        os.environ["OPENAI_CHAT_COMPLETIONS_URL"] = chat_url
+    if base_url:
+        os.environ["OPENAI_BASE_URL"] = base_url
+        os.environ["OPENAI_API_BASE"] = base_url
+    if not api_key:
+        raise RuntimeError(f"OPENAI_API_KEY is not set. Put it in {env_file}.")
+    if not base_url or not chat_url:
         raise ValueError(
-            "OpenAI API URL must be set in .env or runtime config "
-            "(OPENAI_BASE_URL / api.openai_base_url)."
+            "OPENAI_BASE_URL must be set in .env. "
+            "OPENAI_CHAT_COMPLETIONS_URL is optional and defaults to <OPENAI_BASE_URL>/chat/completions."
         )
-    return RuntimeApi(openai_base_url=openai_base_url, openai_chat_completions_url=chat_url)
+    return api_key, base_url, chat_url
 
 
 def _load_runtime_env(payload: dict[str, Any], source: Path) -> dict[str, str]:
@@ -327,6 +321,7 @@ def _apply_run_root_override(root: Path, paths: RuntimePaths, env: dict[str, str
 
 def apply_runtime_env(runtime: RuntimeConfig) -> None:
     """Populate environment variables consumed by the runtime modules."""
+    api_key, openai_base_url, chat_url = _load_api_env(runtime.paths.env_file)
     os.environ["DATA_ROOT"] = str(runtime.paths.data_root)
     os.environ["BENCH_ROOT"] = str(runtime.paths.bench_root)
     os.environ["BENCHMARK_SPLIT_ROOT"] = str(runtime.paths.split_root)
@@ -335,9 +330,6 @@ def apply_runtime_env(runtime: RuntimeConfig) -> None:
     os.environ["MEMORY_ROOT_BASE"] = str(runtime.paths.memory_root_base)
     os.environ["SYSTEM_PROMPTS_PATH"] = str(runtime.paths.system_prompts)
     os.environ["TOOL_CONFIG_PATH"] = str(runtime.paths.tool_config)
-    os.environ["OPENAI_BASE_URL"] = runtime.api.openai_base_url
-    os.environ["OPENAI_API_BASE"] = runtime.api.openai_base_url
-    os.environ["OPENAI_CHAT_COMPLETIONS_URL"] = runtime.api.openai_chat_completions_url
 
     for key, value in runtime.env.items():
         os.environ[key] = value
@@ -346,23 +338,14 @@ def apply_runtime_env(runtime: RuntimeConfig) -> None:
     if missing:
         raise ValueError(f"Missing required runtime env values in {runtime.path}: {', '.join(missing)}")
 
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-    api_key_2 = os.environ.get("OPENAI_API_KEY_2", "")
-    if not api_key:
-        raise RuntimeError(f"OPENAI_API_KEY is not set. Put it in {runtime.paths.env_file}.")
-
     os.environ.setdefault("REASONING_API_KEY", api_key)
-    os.environ.setdefault("REASONING_API_KEY_2", api_key_2)
-    os.environ.setdefault("REASONING_END_POINT", runtime.api.openai_chat_completions_url)
-    os.environ.setdefault("REASONING_END_POINT_2", runtime.api.openai_chat_completions_url)
+    os.environ.setdefault("REASONING_END_POINT", chat_url)
     os.environ.setdefault("VERIFIER_API_KEY", api_key)
-    os.environ.setdefault("VERIFIER_END_POINT", runtime.api.openai_base_url)
+    os.environ.setdefault("VERIFIER_END_POINT", openai_base_url)
     os.environ.setdefault("EXPERIENCE_API_KEY", api_key)
-    os.environ.setdefault("EXPERIENCE_API_KEY_2", api_key_2)
-    os.environ.setdefault("EXPERIENCE_END_POINT", runtime.api.openai_chat_completions_url)
-    os.environ.setdefault("EXPERIENCE_END_POINT_2", runtime.api.openai_chat_completions_url)
+    os.environ.setdefault("EXPERIENCE_END_POINT", chat_url)
     os.environ.setdefault("EXPERIENCE_EMBEDDING_API_KEY", api_key)
-    os.environ.setdefault("EXPERIENCE_EMBEDDING_ENDPOINT", runtime.api.openai_base_url)
+    os.environ.setdefault("EXPERIENCE_EMBEDDING_ENDPOINT", openai_base_url)
 
 
 def load_runtime_config() -> RuntimeConfig:
@@ -382,7 +365,6 @@ def load_runtime_config() -> RuntimeConfig:
         path=config_path,
         project_root=root,
         paths=paths,
-        api=_load_runtime_api(payload, config_path),
         env=env,
     )
     apply_runtime_env(runtime)

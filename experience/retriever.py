@@ -670,13 +670,12 @@ class ExperienceRetriever:
         """Generate a short visual description of images to enrich the retrieval query."""
         try:
             user_content = _build_multimodal_user_content(RETRIEVAL_IMAGE_DESCRIPTION_PROMPT, images[:1])
-            resp = self.llm_client._call_with_fallback(
+            resp = self.llm_client._call_api(
                 user_content=user_content,
                 max_tokens=128,
                 temperature=0.1,
                 top_p=1.0,
-                primary_api_name="Primary Experience API",
-                fallback_api_name="Fallback Experience API",
+                api_name="Experience API",
                 require_chat_completions=True,
                 return_placeholder_on_error=False,
             )
@@ -707,13 +706,12 @@ class ExperienceRetriever:
             try:
                 if images:
                     user_content = _build_multimodal_user_content(prompt, images)
-                    response = self.llm_client._call_with_fallback(
+                    response = self.llm_client._call_api(
                         user_content=user_content,
                         max_tokens=MAX_TOKENS_TASK_DECOMPOSITION,
                         temperature=TEMPERATURE_TASK_DECOMPOSITION,
                         top_p=TOP_P_DEFAULT,
-                        primary_api_name="Primary Experience API",
-                        fallback_api_name="Fallback Experience API",
+                        api_name="Experience API",
                         require_chat_completions=True
                     )
                 else:
@@ -808,14 +806,13 @@ def _rewrite_prompt(experiences: Dict[str, str], task_description: str) -> str:
 
 def _call_rewrite_llm(llm_client: Any, prompt: str, images: Optional[List[Any]]) -> str:
     if images:
-        return llm_client._call_with_fallback(
+        return llm_client._call_api(
             user_content=_build_multimodal_user_content(prompt, images),
             max_tokens=MAX_TOKENS_REWRITE,
             temperature=TEMPERATURE_REWRITE,
             top_p=TOP_P_DEFAULT,
             system_prompt=EXPERIENCE_REWRITE_SYSTEM_PROMPT,
-            primary_api_name="Primary Experience Rewrite API",
-            fallback_api_name="Fallback Experience Rewrite API",
+            api_name="Experience Rewrite API",
             require_chat_completions=True,
             return_placeholder_on_error=False,
         )

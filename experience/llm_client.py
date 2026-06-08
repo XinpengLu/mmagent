@@ -64,13 +64,12 @@ class ExperienceLLM:
 
     def chat(self, prompt: str, max_tokens: int = MAX_TOKENS_DEFAULT, temperature: Optional[float] = None, top_p: float = 1.0) -> str:
         t = temperature if temperature is not None else 0.6
-        return self._call_with_fallback(
+        return self._call_api(
             user_content=prompt,
             max_tokens=max_tokens,
             temperature=t,
             top_p=top_p,
-            primary_api_name="Primary Experience API",
-            fallback_api_name="Fallback Experience API"
+            api_name="Experience API",
         )
 
     def _try_single_experience_api(
@@ -150,28 +149,23 @@ class ExperienceLLM:
             return placeholder
         raise RuntimeError(message)
 
-    def _get_api_config(self, primary_key: str, primary_endpoint: str, 
-                       fallback_key: str, fallback_endpoint: str) -> tuple:
+    def _get_api_config(self, api_key_name: str, endpoint_name: str) -> tuple:
         openai_base = os.environ.get("OPENAI_BASE_URL") or os.environ.get("OPENAI_API_BASE")
         openai_chat_endpoint = os.environ.get("OPENAI_CHAT_COMPLETIONS_URL")
         if not openai_chat_endpoint and openai_base:
             openai_chat_endpoint = openai_base.rstrip("/") + "/chat/completions"
 
-        api_key_1 = (
-            os.environ.get(primary_key)
+        api_key = (
+            os.environ.get(api_key_name)
             or os.environ.get("REASONING_API_KEY")
             or os.environ.get("OPENAI_API_KEY")
         )
-        end_point_1 = (
-            os.environ.get(primary_endpoint)
+        endpoint = (
+            os.environ.get(endpoint_name)
             or os.environ.get("REASONING_END_POINT")
             or openai_chat_endpoint
         )
-        
-        api_key_2 = os.environ.get(fallback_key) or os.environ.get("REASONING_API_KEY_2")
-        end_point_2 = os.environ.get(fallback_endpoint) or os.environ.get("REASONING_END_POINT_2")
-        
-        return api_key_1, end_point_1, api_key_2, end_point_2
+        return api_key, endpoint
 
     def _normalize_endpoint(self, endpoint: str, require_chat_completions: bool = False) -> str:
         if require_chat_completions and not endpoint.endswith("/chat/completions"):
@@ -182,18 +176,7 @@ class ExperienceLLM:
         return endpoint
 
     def _primary_experience_config(self, require_chat_completions: bool) -> tuple:
-        api_key, endpoint, _, _ = self._get_api_config(
-            "EXPERIENCE_API_KEY", "EXPERIENCE_END_POINT",
-            "EXPERIENCE_API_KEY_2", "EXPERIENCE_END_POINT_2"
-        )
-        endpoint = self._normalize_endpoint(endpoint, require_chat_completions) if endpoint else endpoint
-        return api_key, endpoint
-
-    def _fallback_experience_config(self, require_chat_completions: bool) -> tuple:
-        _, _, api_key, endpoint = self._get_api_config(
-            "EXPERIENCE_API_KEY", "EXPERIENCE_END_POINT",
-            "EXPERIENCE_API_KEY_2", "EXPERIENCE_END_POINT_2"
-        )
+        api_key, endpoint = self._get_api_config("EXPERIENCE_API_KEY", "EXPERIENCE_END_POINT")
         endpoint = self._normalize_endpoint(endpoint, require_chat_completions) if endpoint else endpoint
         return api_key, endpoint
 
@@ -220,43 +203,7 @@ class ExperienceLLM:
             return_placeholder_on_error=return_placeholder_on_error
         )
 
-    def _call_fallback_api(
-        self,
-        primary_error: RuntimeError,
-        user_content: Union[str, List[Dict[str, Any]]],
-        max_tokens: int,
-        temperature: float,
-        top_p: float,
-        max_retries: int,
-        system_prompt: Optional[str],
-        timeout: int,
-        return_placeholder_on_error: bool,
-        primary_api_name: str,
-        fallback_api_name: str,
-        require_chat_completions: bool,
-    ) -> str:
-        fallback_key, fallback_endpoint = self._fallback_experience_config(require_chat_completions)
-        if not _api_configured(fallback_key, fallback_endpoint):
-            if return_placeholder_on_error:
-                return f"[Failed: {str(primary_error)}]"
-            raise RuntimeError(f"{primary_api_name} failed and no fallback configured: {primary_error}")
-
-        print(f"[API Fallback] {primary_api_name} failed, switching to {fallback_api_name}...")
-        try:
-            return self._call_configured_api(
-                fallback_key, fallback_endpoint, fallback_api_name,
-                user_content, max_tokens, temperature, top_p, max_retries,
-                system_prompt, timeout, return_placeholder_on_error
-            )
-        except RuntimeError as fallback_error:
-            if return_placeholder_on_error:
-                return "[Failed: both APIs failed]"
-            raise RuntimeError(
-                f"Both {primary_api_name} and {fallback_api_name} failed. "
-                f"Primary: {primary_error}. Fallback: {fallback_error}"
-            )
-
-    def _call_with_fallback(
+    def _call_api(
         self,
         user_content: Union[str, List[Dict[str, Any]]],
         max_tokens: int,
@@ -265,11 +212,10 @@ class ExperienceLLM:
         system_prompt: Optional[str] = None,
         timeout: int = API_TIMEOUT,
         return_placeholder_on_error: bool = False,
-        primary_api_name: str = "Primary API",
-        fallback_api_name: str = "Fallback API",
+        api_name: str = "Experience API",
         require_chat_completions: bool = False
     ) -> str:
-        """Call the primary experience API, then fallback if configured."""
+        """Call the configured experience API with bounded retries."""
         max_retries = MAX_RETRIES
         api_key, endpoint = self._primary_experience_config(require_chat_completions)
         if not _api_configured(api_key, endpoint):
@@ -277,18 +223,11 @@ class ExperienceLLM:
                 return "[API not configured]"
             raise ValueError("EXPERIENCE_API_KEY/END_POINT or REASONING_API_KEY/END_POINT must be set")
 
-        try:
-            return self._call_configured_api(
-                api_key, endpoint, primary_api_name,
-                user_content, max_tokens, temperature, top_p, max_retries,
-                system_prompt, timeout, return_placeholder_on_error
-            )
-        except RuntimeError as primary_error:
-            return self._call_fallback_api(
-                primary_error, user_content, max_tokens, temperature, top_p, max_retries,
-                system_prompt, timeout, return_placeholder_on_error,
-                primary_api_name, fallback_api_name, require_chat_completions
-            )
+        return self._call_configured_api(
+            api_key, endpoint, api_name,
+            user_content, max_tokens, temperature, top_p, max_retries,
+            system_prompt, timeout, return_placeholder_on_error
+        )
 
     def chat_with_image(
         self, 
@@ -319,7 +258,7 @@ class ExperienceLLM:
                 "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
             })
         
-        return self._call_with_fallback(
+        return self._call_api(
             user_content=user_content,
             max_tokens=max_tokens,
             temperature=t,
@@ -327,7 +266,6 @@ class ExperienceLLM:
             system_prompt=system_prompt,
             timeout=API_TIMEOUT_IMAGE,
             return_placeholder_on_error=return_placeholder_on_error,
-            primary_api_name="Primary Multimodal API",
-            fallback_api_name="Fallback Multimodal API",
+            api_name="Multimodal Experience API",
             require_chat_completions=True
         )

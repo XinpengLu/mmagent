@@ -1,4 +1,4 @@
-mode: train_test
+mode: train_val
 benchmarks:
   - TIR-Bench
 
@@ -12,15 +12,7 @@ paths:
   system_prompts: prompts/system_prompts.yaml
   tool_config: configs/tool_configs.yaml
 
-api:
-  openai_base_url: https://api.openai.com/v1
-  openai_chat_completions_url: https://api.openai.com/v1/chat/completions
-
 env:
-  REASONING_MODEL_NAME: gpt-5.5
-  VERIFIER_MODEL_NAME: gpt-4o
-  EXPERIENCE_MODEL_NAME: gpt-5.5
-  EXPERIENCE_EMBEDDING_MODEL: text-embedding-3-small
   ENABLE_FUNCTION_CALLING: "true"
   ENABLE_VALIDATION: "0"
   VALIDATION_EVAL_MEMORY_ISOLATED: "1"
