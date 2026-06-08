@@ -55,9 +55,7 @@ def allow_unvalidated_recovery_inference() -> bool:
     """Whether unverified failure-to-success candidates can be injected."""
     if env_flag("ENABLE_UNVALIDATED_RECOVERY_INFERENCE"):
         return True
-    if env_flag("ENABLE_UNVALIDATED_RECOVERY_VALIDATION_PROBE") and env_flag("MMAGENT_VALIDATION_PHASE"):
-        return True
-    return env_flag("ENABLE_UNVALIDATED_RECOVERY_TRAINING_PROBE") and env_flag("MMAGENT_TRAIN_PHASE")
+    return env_flag("MMAGENT_VALIDATION_PHASE") or env_flag("MMAGENT_TRAIN_PHASE")
 
 
 def experience_unvalidated_recovery(record: Dict[str, Any]) -> bool:

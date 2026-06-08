@@ -8,15 +8,6 @@ from .config import ExperienceLLMSettings
 from .utils import _image_to_base64
 
 
-_DEFAULT_SETTINGS = ExperienceLLMSettings.from_env()
-MAX_RETRIES = _DEFAULT_SETTINGS.max_retries
-
-API_TIMEOUT = _DEFAULT_SETTINGS.api_timeout
-API_TIMEOUT_IMAGE = _DEFAULT_SETTINGS.image_api_timeout
-
-MAX_TOKENS_DEFAULT = _DEFAULT_SETTINGS.default_max_tokens
-
-
 def _is_openai_reasoning_model(model_name: str) -> bool:
     """Return True for OpenAI o-series / GPT-5 reasoning models."""
     model_id = (model_name or "").lower().split("/")[-1]
@@ -62,7 +53,8 @@ class ExperienceLLM:
         self.settings = ExperienceLLMSettings.from_env(model_name)
         self.model_name = self.settings.model_name
 
-    def chat(self, prompt: str, max_tokens: int = MAX_TOKENS_DEFAULT, temperature: Optional[float] = None, top_p: float = 1.0) -> str:
+    def chat(self, prompt: str, max_tokens: Optional[int] = None, temperature: Optional[float] = None, top_p: float = 1.0) -> str:
+        max_tokens = self.settings.default_max_tokens if max_tokens is None else max_tokens
         t = temperature if temperature is not None else 0.6
         return self._call_api(
             user_content=prompt,
@@ -83,10 +75,11 @@ class ExperienceLLM:
         max_retries: int, 
         api_name: str = "API",
         system_prompt: Optional[str] = None,
-        timeout: int = API_TIMEOUT,
+        timeout: Optional[int] = None,
         return_placeholder_on_error: bool = False
     ) -> str:
         """Call one configured endpoint with bounded retries."""
+        timeout = self.settings.api_timeout if timeout is None else timeout
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
         payload = _build_chat_payload(self.model_name, user_content, max_tokens, temperature, top_p, system_prompt)
         last_error = ""
@@ -191,7 +184,7 @@ class ExperienceLLM:
         top_p: float,
         max_retries: int,
         system_prompt: Optional[str],
-        timeout: int,
+        timeout: Optional[int],
         return_placeholder_on_error: bool,
     ) -> str:
         return self._try_single_experience_api(
@@ -210,13 +203,13 @@ class ExperienceLLM:
         temperature: float,
         top_p: float,
         system_prompt: Optional[str] = None,
-        timeout: int = API_TIMEOUT,
+        timeout: Optional[int] = None,
         return_placeholder_on_error: bool = False,
         api_name: str = "Experience API",
         require_chat_completions: bool = False
     ) -> str:
         """Call the configured experience API with bounded retries."""
-        max_retries = MAX_RETRIES
+        max_retries = self.settings.max_retries
         api_key, endpoint = self._primary_experience_config(require_chat_completions)
         if not _api_configured(api_key, endpoint):
             if return_placeholder_on_error:
@@ -230,16 +223,17 @@ class ExperienceLLM:
         )
 
     def chat_with_image(
-        self, 
-        prompt: str, 
+        self,
+        prompt: str,
         image: Union[Image.Image, List[Image.Image]],
-        max_tokens: int = MAX_TOKENS_DEFAULT, 
+        max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
         top_p: float = 1.0,
         system_prompt: Optional[str] = None,
         return_placeholder_on_error: bool = True
     ) -> str:
         """Call the multimodal experience API with one or more PIL images."""
+        max_tokens = self.settings.default_max_tokens if max_tokens is None else max_tokens
         t = temperature if temperature is not None else 0.6
         if system_prompt is None:
             system_prompt = "You are an expert at analyzing images and providing detailed visual descriptions."
@@ -264,7 +258,7 @@ class ExperienceLLM:
             temperature=t,
             top_p=top_p,
             system_prompt=system_prompt,
-            timeout=API_TIMEOUT_IMAGE,
+            timeout=self.settings.image_api_timeout,
             return_placeholder_on_error=return_placeholder_on_error,
             api_name="Multimodal Experience API",
             require_chat_completions=True

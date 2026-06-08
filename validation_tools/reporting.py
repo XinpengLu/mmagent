@@ -207,7 +207,6 @@ def write_validation_report(
     *,
     run_root: Path,
     output_dir: Path | None = None,
-    target_average: float = 0.70,
 ) -> None:
     out_dir = output_dir or (run_root / "analysis")
     rows = _collect_stage_metrics(run_root)
@@ -219,7 +218,7 @@ def write_validation_report(
     write_json(metrics_dir / "stage_metrics.json", {"stages": rows}, indent=2)
     _write_csv(metrics_dir / "stage_metrics.csv", rows)
     if rows:
-        build_all_plots(figures_dir, rows, target_average, run_root)
+        build_all_plots(figures_dir, rows, run_root)
 
     best = max(
         rows,

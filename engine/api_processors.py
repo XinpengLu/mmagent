@@ -24,6 +24,8 @@ from utils.transient import (
 from prompts.answer_templates import final_answer_synthesis_prompt
 
 SYSTEM_PROMPT = ""
+FINAL_ANSWER_MAX_TOKENS = 4096
+FINAL_ANSWER_RETRIES = 3
 
 
 def set_global_prompts(system_prompt):
@@ -306,10 +308,9 @@ def _synthesize_final_answer(current_node, args, sampling_params, save_dir, reas
     messages = list(current_node.api_conversation_history)
     messages.append({"role": "user", "content": final_prompt})
     final_sampling_params = dict(sampling_params)
-    final_max_tokens = env_int("FINAL_ANSWER_MAX_TOKENS", 4096)
     final_sampling_params["max_tokens"] = min(
-        int(final_sampling_params.get("max_tokens", final_max_tokens)),
-        final_max_tokens,
+        int(final_sampling_params.get("max_tokens", FINAL_ANSWER_MAX_TOKENS)),
+        FINAL_ANSWER_MAX_TOKENS,
     )
 
     try:
@@ -317,7 +318,7 @@ def _synthesize_final_answer(current_node, args, sampling_params, save_dir, reas
             args.model_name,
             messages,
             final_sampling_params,
-            max_retries=env_int("FINAL_ANSWER_API_MAX_RETRIES", env_int("REASONING_API_MAX_RETRIES", 3)),
+            max_retries=FINAL_ANSWER_RETRIES,
             tools=None,
         )
     except Exception as e:

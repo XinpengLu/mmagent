@@ -4,17 +4,14 @@ from __future__ import annotations
 
 import os
 
-_FLAG_TRUE_VALUES = {"1", "true", "yes"}
-
-
 def env_bool(name: str, default: bool = False) -> bool:
     value = os.environ.get(name)
     if value is None or value == "":
         return default
     lowered = value.strip().lower()
-    if lowered in {"1", "true", "yes", "y", "on"}:
+    if lowered == "true":
         return True
-    if lowered in {"0", "false", "no", "n", "off"}:
+    if lowered == "false":
         return False
     raise ValueError(f"Invalid boolean environment value for {name}: {value!r}")
 
@@ -31,9 +28,9 @@ def env_float(name: str, default: float) -> float:
 
 def env_flag(name: str, default: bool = False) -> bool:
     value = os.environ.get(name)
-    if value is None:
+    if value is None or value == "":
         return default
-    return value.lower() in _FLAG_TRUE_VALUES
+    return env_bool(name, default)
 
 
 def safe_int(value, default: int = 0) -> int:

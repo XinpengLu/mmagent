@@ -16,9 +16,8 @@ from .config import ExperienceGenerationSettings
 from .utils import _find_original_images, _write_debug_texts
 
 
-SETTINGS = ExperienceGenerationSettings.from_env()
-MAX_RETRIES = SETTINGS.critique_retries
-MAX_TOKENS = SETTINGS.critique_max_tokens
+def _settings() -> ExperienceGenerationSettings:
+    return ExperienceGenerationSettings.from_runtime()
 
 
 def _format_question(question: str, system_prompt: Optional[str]) -> str:
@@ -77,7 +76,8 @@ def _call_with_retries(
     temperature: Optional[float] = None,
     raise_on_final_failure: bool = True,
 ) -> Optional[str]:
-    for attempt in range(MAX_RETRIES):
+    max_retries = _settings().critique_retries
+    for attempt in range(max_retries):
         try:
             return _chat_with_sample_images(
                 llm,
@@ -87,12 +87,12 @@ def _call_with_retries(
                 temperature=temperature,
             )
         except Exception as exc:
-            if attempt == MAX_RETRIES - 1:
+            if attempt == max_retries - 1:
                 if raise_on_final_failure:
                     raise
                 print(f"  Warning: {label} failed: {exc}")
                 return None
-            print(f"  Warning: {label} failed (attempt {attempt + 1}/{MAX_RETRIES}): {exc}, retrying...")
+            print(f"  Warning: {label} failed (attempt {attempt + 1}/{max_retries}): {exc}, retrying...")
             time.sleep(2 ** attempt)
     return None
 
@@ -125,7 +125,7 @@ def intra_sample_experiences(
         llm,
         prompt,
         debug_dir=debug_dir,
-        max_tokens=MAX_TOKENS,
+        max_tokens=_settings().critique_max_tokens,
     )
     print(f"  [Timing] cross rollout critique generation: {time.time() - start:.1f}s")
     if response is None:

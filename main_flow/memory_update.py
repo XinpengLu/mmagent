@@ -195,7 +195,6 @@ def _process_large_batch_experiences(samples_info, args, batch_idx=0, is_final=F
 
 class TrainingMemoryUpdater:
     """Handles train-time memory generation and refresh boundaries."""
-
     def __init__(self, args, memory_runtime):
         self.args = args
         self.memory_runtime = memory_runtime

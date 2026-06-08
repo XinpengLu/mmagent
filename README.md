@@ -168,10 +168,10 @@ selection.
 
 ## Environment
 
-The runner reads API keys from the project-local `.env`:
+The runner reads API keys and model names from:
 
 ```text
-F:\XSkill\mmagent\.env
+F:\XSkill\mmagent\configs\.env
 ```
 
 Runtime mode, benchmarks, paths, and default parameters are loaded from:

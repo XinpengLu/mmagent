@@ -101,9 +101,7 @@ def _metadata_first_allows(candidate_tags: Iterable[str], query_metadata_tags: I
 
 
 def _recovery_probe_enabled() -> bool:
-    if env_bool("ENABLE_UNVALIDATED_RECOVERY_VALIDATION_PROBE", False) and env_bool("MMAGENT_VALIDATION_PHASE", False):
-        return True
-    return env_bool("ENABLE_UNVALIDATED_RECOVERY_TRAINING_PROBE", False) and env_bool("MMAGENT_TRAIN_PHASE", False)
+    return env_bool("MMAGENT_VALIDATION_PHASE", False) or env_bool("MMAGENT_TRAIN_PHASE", False)
 
 
 def _recovery_probe_phase() -> str:

@@ -12,7 +12,7 @@ from tqdm import tqdm
 
 from engine.api_processors import process_single_sample, set_global_prompts as set_processors_prompts
 from skill import update_memory_usage_after_sample
-from utils.env import env_flag, env_float, env_int
+from utils.env import env_flag, env_int
 from utils.transient import (
     result_has_transient_failure,
     text_has_transient_failure,
@@ -96,18 +96,6 @@ def _run_single_rollout(sample, args, sampling_params, rollout_idx):
     return result
 
 
-def _rollout_retry_policy():
-    try:
-        max_attempts = max(1, env_int("ROLLOUT_MAX_ATTEMPTS", 3))
-        wait_seconds = max(0.0, env_float("ROLLOUT_RETRY_WAIT_SECONDS", 5.0))
-    except ValueError as exc:
-        raise ValueError(
-            "ROLLOUT_MAX_ATTEMPTS must be an integer and "
-            "ROLLOUT_RETRY_WAIT_SECONDS must be a number."
-        ) from exc
-    return max_attempts, wait_seconds
-
-
 def _rollout_output_dir(output_dir, question_id, rollout_idx, rollouts_per_sample):
     sample_dir = os.path.join(output_dir, str(question_id))
     if int(rollouts_per_sample or 1) > 1:
@@ -135,7 +123,8 @@ def _record_sample_info(all_results, sample_info):
 def _run_rollout_until_valid(sample, args, sampling_params, rollout_idx, run_single_rollout_func=_run_single_rollout):
     """Run one rollout index until the saved trajectory is free of transient failures."""
     question_id = sample.get("doc_id", sample.get("question_id", "N/A"))
-    max_attempts, wait_seconds = _rollout_retry_policy()
+    max_attempts = 3
+    wait_seconds = 5.0
     last_reason = "transient rollout failure"
 
     for attempt in range(1, max_attempts + 1):

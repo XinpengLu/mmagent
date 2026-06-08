@@ -47,7 +47,6 @@ def _write_history_csv(path: Path, rows: List[Dict[str, Any]], k: int) -> None:
                 f"best_average@{k}",
                 "min_task_average",
                 "weakest_task",
-                "target_met",
                 "with_tool_ratio",
                 "selected_skill_ratio",
                 "recovery_skill_ratio",
@@ -77,7 +76,6 @@ def _write_history_csv(path: Path, rows: List[Dict[str, Any]], k: int) -> None:
                     f"best_average@{k}": current_best["average"],
                     "min_task_average": row.get("min_task_average_at_k"),
                     "weakest_task": row.get("weakest_task"),
-                    "target_met": row.get("target_met"),
                     "with_tool_ratio": (row.get("tool_usage") or {}).get("with_tool_ratio"),
                     "selected_skill_ratio": (row.get("memory_action_usage") or {}).get("selected_skill_ratio"),
                     "recovery_skill_ratio": (row.get("memory_action_usage") or {}).get("recovery_skill_ratio"),
@@ -101,8 +99,6 @@ def record_validation_stage(
     history_path: Path,
     output_json: Path,
     k: int,
-    target_average_min: float,
-    target_min_task_average: float,
 ) -> None:
     metrics = load_metrics(metrics_dir, k)
     per_task = per_task_metrics(metrics_dir, k)
@@ -135,10 +131,6 @@ def record_validation_stage(
         "tool_usage": usage,
         "memory_action_usage": action_usage,
         "memory_stats": mem_stats,
-        "target_met": bool(
-            metrics["average_at_k"] >= target_average_min
-            and (target_min_task_average <= 0 or min_task_average >= target_min_task_average)
-        ),
     }
 
     rows = read_history(history_path)

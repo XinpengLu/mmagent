@@ -14,9 +14,24 @@ from .context import (
     _count_json_items,
     _default_prompt_and_tools,
 )
-from .health import check_phase_health
-from utils.env import env_bool, env_float, env_int
 from utils.artifacts import AVERAGE_PASS_FILENAME, DATASET_SUMMARY_FILENAME, read_json, write_json
+
+
+def _setting(settings: dict, path: str, default):
+    current = settings
+    for key in path.split("."):
+        if not isinstance(current, dict) or key not in current:
+            return default
+        current = current[key]
+    return current
+
+
+def _setting_int(settings: dict, path: str, default: int) -> int:
+    return int(_setting(settings, path, default))
+
+
+def _setting_float(settings: dict, path: str, default: float) -> float:
+    return float(_setting(settings, path, default))
 
 
 @dataclass(frozen=True)
@@ -37,7 +52,6 @@ class _MemoryPaths:
 
 @dataclass(frozen=True)
 class _ExecutionSettings:
-    skip_completed: bool
     temperature: float
     top_p: float
     max_completion_tokens: int
@@ -68,38 +82,38 @@ class _ExecutionSettings:
     experience_retrieval_min_similarity: float
 
     @classmethod
-    def from_env(cls) -> "_ExecutionSettings":
-        num_workers = env_int("NUM_WORKERS", 8)
+    def from_context(cls, ctx: MainFlowContext) -> "_ExecutionSettings":
+        settings = ctx.settings
+        num_workers = _setting_int(settings, "runtime.num_workers", 8)
         return cls(
-            skip_completed=env_bool("SKIP_COMPLETED", True),
-            temperature=env_float("TEMPERATURE", 0.6),
-            top_p=env_float("TOP_P", 1.0),
-            max_completion_tokens=env_int("MAX_COMPLETION_TOKENS", 8192),
-            max_turns=env_int("MAX_TURNS", 20),
-            max_images=env_int("MAX_IMAGES", 50),
-            max_total_tokens=env_int("MAX_TOTAL_TOKENS", 32768),
-            max_pixels=env_int("MAX_PIXELS", 2000000),
-            min_pixels=env_int("MIN_PIXELS", 40000),
+            temperature=0.6,
+            top_p=1.0,
+            max_completion_tokens=8192,
+            max_turns=20,
+            max_images=50,
+            max_total_tokens=32768,
+            max_pixels=2_000_000,
+            min_pixels=40_000,
             num_workers=num_workers,
-            rollouts_per_sample=env_int("ROLLOUTS_PER_SAMPLE", 4),
-            seed_base=env_int("SEED_BASE", 42),
-            system_prompts_path=os.environ.get("SYSTEM_PROMPTS_PATH", "prompts/system_prompts.yaml"),
-            tool_config_path=os.environ.get("TOOL_CONFIG_PATH", "configs/tool_configs.yaml"),
-            image_search_max_calls=env_int("IMAGE_SEARCH_MAX_CALLS", 5),
-            web_search_max_calls=env_int("WEB_SEARCH_MAX_CALLS", 7),
-            code_interpreter_max_calls=env_int("CODE_INTERPRETER_MAX_CALLS", 10),
-            experience_max_ops=env_int("EXPERIENCE_MAX_OPS", 3),
-            experience_large_batch=env_int("EXPERIENCE_LARGE_BATCH", 8),
-            experience_max_items=env_int("EXPERIENCE_MAX_ITEMS", 90),
-            experience_generation_workers=env_int("EXPERIENCE_GENERATION_WORKERS", num_workers),
-            skill_cluster_max_clusters=env_int("SKILL_CLUSTER_MAX_CLUSTERS", 12),
-            skill_cluster_min_experiences=env_int("SKILL_CLUSTER_MIN_EXPERIENCES", 2),
-            skill_retrieval_top_k=env_int("SKILL_RETRIEVAL_TOP_K", 3),
-            skill_retrieval_min_similarity=env_float("SKILL_RETRIEVAL_MIN_SIMILARITY", 0.0),
-            memory_rerank_top_skills=env_int("MEMORY_RERANK_TOP_SKILLS", 2),
-            memory_rerank_top_experiences=env_int("MEMORY_RERANK_TOP_EXPERIENCES", 8),
-            experience_retrieval_top_k=env_int("EXPERIENCE_RETRIEVAL_TOP_K", 3),
-            experience_retrieval_min_similarity=env_float("EXPERIENCE_RETRIEVAL_MIN_SIMILARITY", 0.0),
+            rollouts_per_sample=_setting_int(settings, "rollout.per_sample", 4),
+            seed_base=42,
+            system_prompts_path=str(ctx.system_prompts),
+            tool_config_path=str(ctx.tool_config),
+            image_search_max_calls=5,
+            web_search_max_calls=7,
+            code_interpreter_max_calls=10,
+            experience_max_ops=3,
+            experience_large_batch=_setting_int(settings, "experience.large_batch", 8),
+            experience_max_items=_setting_int(settings, "experience.max_items", 90),
+            experience_generation_workers=_setting_int(settings, "experience.generation_workers", num_workers),
+            skill_cluster_max_clusters=_setting_int(settings, "skill.cluster.max_clusters", 12),
+            skill_cluster_min_experiences=_setting_int(settings, "skill.cluster.min_experiences", 2),
+            skill_retrieval_top_k=_setting_int(settings, "skill.retrieval.top_k", 3),
+            skill_retrieval_min_similarity=_setting_float(settings, "skill.retrieval.min_similarity", 0.0),
+            memory_rerank_top_skills=_setting_int(settings, "memory.rerank_top_skills", 2),
+            memory_rerank_top_experiences=_setting_int(settings, "memory.rerank_top_experiences", 8),
+            experience_retrieval_top_k=_setting_int(settings, "experience.retrieval.top_k", 3),
+            experience_retrieval_min_similarity=_setting_float(settings, "experience.retrieval.min_similarity", 0.0),
         )
 
 
@@ -201,11 +215,6 @@ def _count_samples_for_phase(phase: str, data_path: Path, phase_env: dict[str, s
     return int(value) if value else _count_json_items(data_path)
 
 
-def _set_phase_env_default(env: dict[str, str], key: str, value: str) -> None:
-    if key not in env and key not in os.environ:
-        env[key] = value
-
-
 def _resolve_memory_paths(benchmark: str, ctx: MainFlowContext, phase_env: dict[str, str]) -> _MemoryPaths:
     memory_name = os.environ.get("MEMORY_NAME") or benchmark
     phase_memory_root = phase_env.get("MEMORY_ROOT_OVERRIDE", "")
@@ -286,7 +295,7 @@ def _build_execution_args(
         input_file=str(data_path),
         image_folder=str(image_dir),
         output_dir=str(output_dir),
-        skip_completed=settings.skip_completed,
+        skip_completed=True,
         disable_memory_usage_update=phase in {"val", "test"},
         max_samples=max_samples,
         temperature=settings.temperature,
@@ -362,8 +371,8 @@ def _run_main_flow_execution(args):
         or output_name.startswith("validation")
     )
     is_train_phase = output_name == "train" or output_name.startswith("train_")
-    os.environ["MMAGENT_TRAIN_PHASE"] = "1" if is_train_phase else "0"
-    os.environ["MMAGENT_VALIDATION_PHASE"] = "1" if is_validation_phase else "0"
+    os.environ["MMAGENT_TRAIN_PHASE"] = "true" if is_train_phase else "false"
+    os.environ["MMAGENT_VALIDATION_PHASE"] = "true" if is_validation_phase else "false"
 
     try:
         config = ExperimentConfig(args).load()
@@ -425,11 +434,6 @@ def _build_phase_env(
             "SKILL_LIBRARY": str(memory.skill_library),
         }
     )
-    if phase == "val":
-        _set_phase_env_default(env, "ENABLE_UNVALIDATED_RECOVERY_VALIDATION_PROBE", "1")
-        _set_phase_env_default(env, "ENABLE_UNVALIDATED_RECOVERY_TOOL_PLAN", "1")
-    elif phase == "train":
-        _set_phase_env_default(env, "ENABLE_UNVALIDATED_RECOVERY_TRAINING_PROBE", "1")
     return env
 
 
@@ -449,7 +453,7 @@ def run_phase(
     if not paths.data_path.exists():
         raise SystemExit(f"Error: missing {phase} data file: {paths.data_path}")
     max_samples = _count_samples_for_phase(phase, paths.data_path, phase_env)
-    settings = _ExecutionSettings.from_env()
+    settings = _ExecutionSettings.from_context(ctx)
     paths.output_dir.mkdir(parents=True, exist_ok=True)
     paths.log_file.parent.mkdir(parents=True, exist_ok=True)
     memory.memory_root.mkdir(parents=True, exist_ok=True)
@@ -486,7 +490,6 @@ def run_phase(
     )
     with _patched_environ(env), _tee_output(paths.log_file):
         _run_main_flow_execution(args)
-    check_phase_health(phase, paths.output_dir, memory.memory_root, paths.log_file)
 
     if phase in {"val", "test"}:
         _write_phase_summary(paths.output_dir, settings.rollouts_per_sample)

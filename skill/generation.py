@@ -25,6 +25,7 @@ from experience.schema import (
     normalize_experience_library,
     normalize_experience_record,
 )
+from .config import SkillSettings
 from .failure_recovery import synthesize_recovery_experiences
 from .filters import experience_failed_validation, experience_low_validation_quality
 from .index import (
@@ -40,6 +41,10 @@ from .utils import (
     skill_name_token,
     slugify,
 )
+
+
+def _settings() -> SkillSettings:
+    return SkillSettings.from_env()
 
 
 _PREVIOUS_SKILL_METADATA_KEYS = (
@@ -144,9 +149,14 @@ def _majority_tags(records: List[Dict[str, Any]], key: str) -> List[str]:
 
 def _cluster_by_tags_and_content(
     experiences: ExperienceLibrary,
-    similarity_threshold: float = 0.74,
+    similarity_threshold: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """Cluster experiences by embedding similarity, with tag-only fallback."""
+    similarity_threshold = (
+        _settings().cluster_similarity_threshold
+        if similarity_threshold is None
+        else similarity_threshold
+    )
     normalized = {
         exp_id: mark_low_information_success(record)
         for exp_id, record in normalize_experience_library(experiences).items()

@@ -246,7 +246,7 @@ class _RecoverySynthesizer:
     def __init__(self, llm: Any, *, max_success_candidates: int = 4):
         self.llm = llm
         self.max_success_candidates = max(1, int(max_success_candidates or 4))
-        self.max_tokens = env_int("FAILURE_RECOVERY_MAX_TOKENS", 1024)
+        self.max_tokens = 1024
 
     def propose_recovery(
         self,

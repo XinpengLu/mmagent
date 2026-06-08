@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 
 DEFAULT_PROMPT_TOOLS = ("multi_tool_agent", "web_search, visit, code_interpreter")
@@ -38,7 +39,10 @@ class MainFlowContext:
     split_root: Path
     output_root: Path
     log_root: Path
+    system_prompts: Path
+    tool_config: Path
     benchmark_count: int
+    settings: dict[str, Any] = field(default_factory=dict)
 
 
 def _count_json_items(path: Path) -> int:
@@ -50,7 +54,20 @@ def _default_prompt_and_tools(benchmark: str) -> tuple[str, str]:
     return BENCHMARK_PROMPT_TOOLS.get(benchmark, DEFAULT_PROMPT_TOOLS)
 
 
-def build_context(benchmark_count: int) -> MainFlowContext:
+def build_context(benchmark_count: int, runtime=None) -> MainFlowContext:
+    if runtime is not None:
+        return MainFlowContext(
+            data_root=runtime.paths.data_root,
+            bench_root=runtime.paths.bench_root,
+            split_root=runtime.paths.split_root,
+            output_root=runtime.paths.output_root,
+            log_root=runtime.paths.log_root,
+            system_prompts=runtime.paths.system_prompts,
+            tool_config=runtime.paths.tool_config,
+            benchmark_count=benchmark_count,
+            settings=runtime.settings,
+        )
+
     resolved_data_root = _data_root(_project_root())
     return MainFlowContext(
         data_root=resolved_data_root,
@@ -58,5 +75,7 @@ def build_context(benchmark_count: int) -> MainFlowContext:
         split_root=Path(os.environ.get("BENCHMARK_SPLIT_ROOT") or resolved_data_root / "benchmark" / "split"),
         output_root=Path(os.environ.get("OUTPUT_ROOT") or resolved_data_root / "output" / "full_benchmark"),
         log_root=Path(os.environ.get("LOG_ROOT") or resolved_data_root / "output" / "full_benchmark" / "_logs"),
+        system_prompts=Path(os.environ.get("SYSTEM_PROMPTS_PATH") or resolved_data_root / "prompts" / "system_prompts.yaml"),
+        tool_config=Path(os.environ.get("TOOL_CONFIG_PATH") or resolved_data_root / "configs" / "tool_configs.yaml"),
         benchmark_count=benchmark_count,
     )

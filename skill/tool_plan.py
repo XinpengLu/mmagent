@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 
-from utils.env import env_bool, env_float, env_int, safe_float, safe_int
+from utils.env import env_float, env_int, safe_float, safe_int
 from prompts.skill_injection_templates import (
     DEFAULT_TOOL_PLAN_TEMPLATE,
     MANDATORY_TOOL_PLAN_TEMPLATE,
@@ -79,20 +79,6 @@ def _failure_guardrail_tool_plan_allowed(skill: Dict[str, Any]) -> bool:
     return used_count >= min_uses and usage_rate >= min_rate
 
 
-def _allow_unvalidated_recovery_tool_plan_probe() -> bool:
-    """Allow candidate recovery plans only when explicitly probing validation.
-
-    Recovery candidates need to execute their proposed plan during validation;
-    otherwise validation only tests their text description. Final inference keeps
-    the stricter default unless ENABLE_UNVALIDATED_RECOVERY_TOOL_PLAN is set.
-    """
-    if env_bool("ENABLE_UNVALIDATED_RECOVERY_TOOL_PLAN", False):
-        return True
-    if not env_bool("ENABLE_UNVALIDATED_RECOVERY_TOOL_PLAN_VALIDATION_PROBE", True):
-        return False
-    return allow_unvalidated_recovery_inference()
-
-
 def _action_skill_tool_plan_allowed(skill: Dict[str, Any]) -> bool:
     """Gate mandatory execution to skills with enough evidence to drive action."""
     metadata = skill.get("metadata", {}) if isinstance(skill, dict) else {}
@@ -109,7 +95,7 @@ def _action_skill_tool_plan_allowed(skill: Dict[str, Any]) -> bool:
     if val_used:
         if metadata.get("skill_type") == "recovery_action_skill":
             min_val_uses = env_int("MIN_VALIDATION_USES_TO_GATE_RECOVERY_TOOL_PLAN", 3)
-            if val_used < min_val_uses and _allow_unvalidated_recovery_tool_plan_probe():
+            if val_used < min_val_uses:
                 return True
         allowed = val_quality >= env_float("ACTION_SKILL_MIN_VALIDATION_AVERAGE", 0.12)
         if metadata.get("skill_type") == "recovery_action_skill":
@@ -127,11 +113,8 @@ def _action_skill_tool_plan_allowed(skill: Dict[str, Any]) -> bool:
     confidence = safe_float(metadata.get("confidence"), 0.0)
 
     if metadata.get("skill_type") == "recovery_action_skill":
-        allow_unvalidated_tool_plan = _allow_unvalidated_recovery_tool_plan_probe()
-        allow_train_supported_probe = recovery_has_train_support(metadata)
         return (
-            (allow_unvalidated_tool_plan or allow_train_supported_probe)
-            and recovery_support > 0
+            recovery_support > 0
             and (success_prior_support > 0 or supervised_support > 0)
         )
 
@@ -172,7 +155,6 @@ def _direct_experience_tool_plan_allowed(record: Dict[str, Any]) -> bool:
         val_used <= 0
         and stats.get("supervised_correction")
         and experience_unvalidated_recovery(record)
-        and (_allow_unvalidated_recovery_tool_plan_probe() or recovery_has_train_support(record))
     ):
         return True
 

@@ -22,7 +22,8 @@ from validation_tools.metrics import sample_metric
 from validation_tools.tasks import task_of_sample
 from utils.artifacts import MEMORY_USAGE_FILENAME, ROLLOUT_METRICS_FILENAME, TRAJECTORY_FILENAME
 from utils.artifacts import read_json, write_json
-from utils.env import env_bool, env_float, env_int
+from configs.runtime import runtime_setting
+from utils.env import env_float, env_int
 
 
 def _sample_id(sample: Dict[str, Any]) -> str:
@@ -292,14 +293,14 @@ def _write_reflection_memory(
         operations,
         ExperienceLLM(),
         debug_dir=str(metrics_dir / "validation_reflection_merge"),
-        experience_limit=env_int("EXPERIENCE_MAX_ITEMS", 90),
+        experience_limit=int(runtime_setting("experience.max_items", 90)),
     )
     memory_root.mkdir(parents=True, exist_ok=True)
     save_library(str(exp_path), merged)
 
     skill_args = SimpleNamespace(
-        skill_cluster_min_experiences=env_int("SKILL_CLUSTER_MIN_EXPERIENCES", 2),
-        skill_cluster_max_clusters=env_int("SKILL_CLUSTER_MAX_CLUSTERS", 12),
+        skill_cluster_min_experiences=int(runtime_setting("skill.cluster.min_experiences", 2)),
+        skill_cluster_max_clusters=int(runtime_setting("skill.cluster.max_clusters", 12)),
         skill_max_length=env_int("SKILL_MAX_LENGTH", 1000),
     )
     merged = cluster_experiences_to_skills(merged, str(skill_library), ExperienceLLM(), skill_args)
@@ -361,9 +362,8 @@ def reflect_validation_failures(
 
     result["candidates"] = len(result["samples"])
     result["operations"] = len(operations)
-    write_back = env_bool("VALIDATION_REFLECTION_WRITE_BACK", False)
-    result["write_back"] = bool(write_back and operations)
-    if operations and write_back:
+    result["write_back"] = bool(operations)
+    if operations:
         _write_reflection_memory(
             memory_root=memory_root,
             metrics_dir=metrics_dir,

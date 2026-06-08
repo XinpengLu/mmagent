@@ -5,14 +5,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image
 
 from prompts.experience_retrieval_templates import IMAGE_DESCRIPTION_PROMPT
-from utils.env import env_int
+from .config import ExperienceGenerationSettings
 from .llm_client import ExperienceLLM
 
 
-# Constants
-MAX_TOKENS = env_int("EXPERIENCE_IMAGE_CAPTION_MAX_TOKENS", 512)
-
-MAX_WORKERS = env_int("EXPERIENCE_IMAGE_CAPTION_WORKERS", 4)
+def _settings() -> ExperienceGenerationSettings:
+    return ExperienceGenerationSettings.from_runtime()
 
 
 CaptionTarget = Dict[str, Any]
@@ -221,7 +219,7 @@ def _generate_missing_captions(
         return {}
 
     captions = {}
-    max_workers = min(len(to_generate), MAX_WORKERS)
+    max_workers = min(len(to_generate), _settings().caption_workers)
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_key = {
             executor.submit(_generate_caption_job, target, llm, sample_path, cache_dir): target["caption_key"]
@@ -290,8 +288,8 @@ def _generate_single_image_caption(
         return llm.chat_with_image(
             prompt=prompt,
             image=images_to_send,
-            max_tokens=MAX_TOKENS,
-            temperature=0.3,
+            max_tokens=_settings().caption_max_tokens,
+            temperature=_settings().caption_temperature,
             return_placeholder_on_error=True
         )
     except Exception as e:

@@ -19,6 +19,16 @@ from utils.env import env_bool, env_float, env_int
 from utils.artifacts import DATASET_SUMMARY_FILENAME
 
 
+def _validation_setting(ctx: MainFlowContext, key: str, default):
+    section = ctx.settings.get("validation", {}) if isinstance(ctx.settings, dict) else {}
+    return section.get(key, default) if isinstance(section, dict) else default
+
+
+def _rollout_setting(ctx: MainFlowContext, key: str, default):
+    section = ctx.settings.get("rollout", {}) if isinstance(ctx.settings, dict) else {}
+    return section.get(key, default) if isinstance(section, dict) else default
+
+
 @dataclass(frozen=True)
 class _ValidationPaths:
     train_memory_root: Path
@@ -144,9 +154,7 @@ def _copy_train_stage_metrics(paths: _ValidationPaths, stage_index: int) -> None
         )
 
 
-def _validation_memory_for_stage(paths: _ValidationPaths, stage_index: int, isolated_validation: bool) -> Path:
-    if not isolated_validation:
-        return paths.train_memory_root
+def _validation_memory_for_stage(paths: _ValidationPaths, stage_index: int) -> Path:
     _copy_memory_snapshot(paths.train_memory_root, paths.snapshot_root / f"stage_{stage_index}_train")
     validation_memory_root = paths.snapshot_root / f"stage_{stage_index}_eval_work"
     _copy_memory_snapshot(paths.train_memory_root, validation_memory_root)
@@ -193,10 +201,6 @@ def _run_validation_rollouts(
             "VAL_LOG_OUTPUT_DIR": str(ctx.log_root / benchmark / "val" / f"val_stage_{stage_index}"),
             "MAX_SAMPLES_VAL": str(_count_json_items(paths.val_file)),
             "MEMORY_ROOT_OVERRIDE": str(validation_memory_root),
-            "ENABLE_UNVALIDATED_RECOVERY_VALIDATION_PROBE": os.environ.get(
-                "ENABLE_UNVALIDATED_RECOVERY_VALIDATION_PROBE", "1"
-            ),
-            "ENABLE_UNVALIDATED_RECOVERY_TOOL_PLAN": os.environ.get("ENABLE_UNVALIDATED_RECOVERY_TOOL_PLAN", "1"),
         },
     )
 
@@ -220,13 +224,14 @@ def _apply_stage_feedback(
 
 
 def _run_validation_reflection(
+    ctx: MainFlowContext,
     paths: _ValidationPaths,
     val_stage_dir: Path,
     validation_memory_root: Path,
     stage_index: int,
     val_k: int,
 ) -> None:
-    if not env_bool("ENABLE_VALIDATION_REFLECTION", False):
+    if not bool(_validation_setting(ctx, "reflection", False)):
         return
     reflection_json = val_stage_dir / "reflection.json"
     reflect_validation_failures(
@@ -237,7 +242,7 @@ def _run_validation_reflection(
         output_json=reflection_json,
         skill_library=validation_memory_root / "skill_library.anchor",
         k=val_k,
-        max_samples=env_int("VALIDATION_REFLECTION_MAX_SAMPLES", 4),
+        max_samples=int(_validation_setting(ctx, "reflection_max_samples", 4)),
         min_average=env_float("VALIDATION_REFLECTION_MIN_AVERAGE", 0.25),
     )
     if not env_bool("VALIDATION_REBUILD_SKILLS_AFTER_REFLECTION", True):
@@ -270,23 +275,6 @@ def _record_stage_history(
         history_path=paths.history_path,
         output_json=val_stage_dir / "summary.json",
         k=val_k,
-        target_average_min=env_float("VALIDATION_TARGET_AVERAGE_MIN", 0.35),
-        target_min_task_average=env_float("VALIDATION_TARGET_MIN_TASK_AVERAGE", 0.20),
-    )
-
-
-def _restore_best_after_stage(paths: _ValidationPaths, isolated_validation: bool) -> None:
-    if not env_bool("VALIDATION_RESTORE_BEST_EACH_STAGE", False):
-        return
-    if isolated_validation:
-        print("Validation memory is isolated; skipping per-stage restore into training memory.")
-        return
-    print("Restoring best validation memory snapshot so far...")
-    select_best(
-        history_path=paths.history_path,
-        snapshot_root=paths.snapshot_root,
-        output_memory_root=paths.train_memory_root,
-        output_json=paths.selected_json,
     )
 
 
@@ -295,7 +283,6 @@ def _run_one_validation_stage(
     ctx: MainFlowContext,
     paths: _ValidationPaths,
     row: dict[str, Any],
-    isolated_validation: bool,
 ) -> None:
     stage_index = int(row["stage_index"])
     train_seen = int(row["train_samples_seen"])
@@ -311,30 +298,26 @@ def _run_one_validation_stage(
         )
 
     _run_training_stage(benchmark, ctx, paths, stage_index, train_seen, stage_json)
-    validation_memory_root = _validation_memory_for_stage(paths, stage_index, isolated_validation)
-    val_k = env_int("ROLLOUTS_PER_SAMPLE", 4)
+    validation_memory_root = _validation_memory_for_stage(paths, stage_index)
+    val_k = int(_rollout_setting(ctx, "per_sample", 4))
     _run_validation_rollouts(benchmark, ctx, paths, stage_index, val_stage_dir, validation_memory_root)
     _apply_stage_feedback(val_stage_dir, validation_memory_root, stage_index, val_k)
-    _run_validation_reflection(paths, val_stage_dir, validation_memory_root, stage_index, val_k)
+    _run_validation_reflection(ctx, paths, val_stage_dir, validation_memory_root, stage_index, val_k)
     _record_stage_history(paths, val_stage_dir, validation_memory_root, stage_index, train_seen, val_k)
     _copy_memory_snapshot(validation_memory_root, paths.snapshot_root / f"stage_{stage_index}")
-    _restore_best_after_stage(paths, isolated_validation)
 
 
 def _finalize_validation_run(
     benchmark: str,
     ctx: MainFlowContext,
     paths: _ValidationPaths,
-    isolated_validation: bool,
 ) -> None:
     write_validation_report(
         run_root=paths.benchmark_output_root,
         output_dir=paths.analysis_output_root,
-        target_average=env_float("VALIDATION_TARGET_AVERAGE_MIN", 0.70),
     )
-    if env_bool("VALIDATION_FINAL_SELECT_BEST", False):
-        if isolated_validation:
-            _copy_memory_snapshot(paths.train_memory_root, paths.snapshot_root / "final_train_memory")
+    if bool(_validation_setting(ctx, "final_select_best", False)):
+        _copy_memory_snapshot(paths.train_memory_root, paths.snapshot_root / "final_train_memory")
         output_memory_root = paths.train_memory_root
     else:
         output_memory_root = Path(
@@ -352,8 +335,7 @@ def _finalize_validation_run(
 def run_train_with_validation(benchmark: str, ctx: MainFlowContext) -> None:
     paths = _validation_paths(benchmark, ctx)
     stages, resume_stage = _validation_stages_to_run(paths)
-    isolated_validation = env_bool("VALIDATION_EVAL_MEMORY_ISOLATED", True)
     _prepare_validation_dirs(paths, resume_stage)
     for row in stages:
-        _run_one_validation_stage(benchmark, ctx, paths, row, isolated_validation)
-    _finalize_validation_run(benchmark, ctx, paths, isolated_validation)
+        _run_one_validation_stage(benchmark, ctx, paths, row)
+    _finalize_validation_run(benchmark, ctx, paths)

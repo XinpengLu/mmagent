@@ -1,60 +1,67 @@
 mode: train_val
+
 benchmarks:
   - TIR-Bench
 
 paths:
-  env_file: .env
   benchmark_processed: benchmark/processed
   benchmark_split: benchmark/split
   output_root: output/full_benchmark
-  log_root: output/full_benchmark/_logs
   memory_root_base: memory_bank
   system_prompts: prompts/system_prompts.yaml
   tool_config: configs/tool_configs.yaml
 
-env:
-  ENABLE_FUNCTION_CALLING: "true"
-  ENABLE_VALIDATION: "0"
-  VALIDATION_EVAL_MEMORY_ISOLATED: "1"
-  VALIDATION_RESTORE_BEST_EACH_STAGE: "0"
-  VALIDATION_FINAL_SELECT_BEST: "1"
-  VALIDATION_TARGET_AVERAGE_MIN: "0.65"
-  VALIDATION_TARGET_MIN_TASK_AVERAGE: "0.20"
-  ENABLE_VALIDATION_REFLECTION: "1"
-  VALIDATION_REFLECTION_WRITE_BACK: "0"
-  VALIDATION_REFLECTION_MAX_SAMPLES: "4"
-  NUM_WORKERS: "8"
-  ROLLOUTS_PER_SAMPLE: "4"
-  ROLLOUT_MAX_ATTEMPTS: "3"
-  ROLLOUT_RETRY_WAIT_SECONDS: "5"
-  REASONING_API_MAX_RETRIES: "3"
-  REASONING_API_BASE_WAIT: "1"
-  REASONING_API_MAX_WAIT: "30"
-  FINAL_ANSWER_API_MAX_RETRIES: "3"
-  EXPERIENCE_LARGE_BATCH: "8"
-  EXPERIENCE_GENERATION_WORKERS: "2"
-  EXPERIENCE_MAX_ITEMS: "90"
-  EXPERIENCE_API_MAX_RETRIES: "3"
-  EXPERIENCE_API_BASE_WAIT: "1"
-  EXPERIENCE_API_MAX_WAIT: "30"
-  EXPERIENCE_CRITIQUE_MAX_RETRIES: "3"
-  EXPERIENCE_EMBEDDING_MAX_RETRIES: "3"
-  TRAJ_SUMMARY_MAX_RETRIES: "3"
-  SKIP_COMPLETED: "1"
-  TRAJ_SUMMARY_MAX_TOKENS: "4096"
-  EXPERIENCE_CRITIQUE_MAX_TOKENS: "4096"
-  EXPERIENCE_IMAGE_CAPTION_MAX_TOKENS: "512"
-  EXPERIENCE_IMAGE_CAPTION_WORKERS: "4"
-  TRAJ_SUMMARY_IMAGE_BUDGET: "12"
-  TRAJ_SUMMARY_TOOL_IMAGES_PER_ROLLOUT: "3"
-  TRAJ_SUMMARY_IMAGE_CAPTION_INCLUDE_SYSTEM_PROMPT: "0"
-  TRAJ_SUMMARY_CAPTION_TOOL_WITH_ORIGINAL: "0"
-  ENABLE_FAST_EXPERIENCE_LIMIT_PRUNE: "1"
-  FAST_EXPERIENCE_PRUNE_MAX_OVERFLOW: "12"
-  FAILURE_RECOVERY_MAX_LLM_CALLS: "1"
-  FAILURE_RECOVERY_MAX_CANDIDATES: "1"
-  FAILURE_RECOVERY_SUCCESS_CANDIDATES: "3"
-  FAILURE_RECOVERY_MAX_TOKENS: "1024"
-  ENABLE_UNVALIDATED_RECOVERY_TRAINING_PROBE: "1"
-  ENABLE_UNVALIDATED_RECOVERY_VALIDATION_PROBE: "1"
-  ENABLE_UNVALIDATED_RECOVERY_TOOL_PLAN: "1"
+runtime:
+  enable_function_calling: true
+  num_workers: 8
+
+rollout:
+  per_sample: 4
+  summary_image_budget: 12
+  summary_tool_images_per_rollout: 3
+
+validation:
+  final_select_best: true
+  reflection: true
+  reflection_max_samples: 4
+
+experience:
+  large_batch: 8
+  generation_workers: 2
+  max_items: 90
+  image_caption_workers: 4
+
+  library:
+    merge_similarity_threshold: 0.70
+    reduction_similarity_threshold: 0.60
+    similarity_top_k: 10
+    reduction_max_rounds: 3
+
+  retrieval:
+    top_k: 3
+    min_similarity: 0.0
+    mmr_lambda: 0.7
+    direct_max_experiences: 20
+
+  fast_prune:
+    enabled: true
+    max_overflow: 12
+
+memory:
+  rerank_top_skills: 2
+  rerank_top_experiences: 8
+
+skill:
+  cluster:
+    max_clusters: 12
+    min_experiences: 2
+    similarity_threshold: 0.74
+
+  retrieval:
+    top_k: 3
+    min_similarity: 0.0
+
+failure_recovery:
+  max_llm_calls: 1
+  max_candidates: 1
+  success_candidates: 3

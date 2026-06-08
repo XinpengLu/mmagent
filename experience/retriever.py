@@ -16,35 +16,25 @@ from utils.json_utils import parse_llm_json_list, parse_llm_json_object
 import logging
 logger = logging.getLogger(__name__)
 
-from .config import EmbeddingSettings
+from .config import EmbeddingSettings, ExperienceRetrievalSettings
 
 
-_EMBEDDING_SETTINGS = EmbeddingSettings.from_env()
-MAX_RETRIES = _EMBEDDING_SETTINGS.max_retries
-API_TIMEOUT = _EMBEDDING_SETTINGS.timeout
-EMBEDDING_MAX_CONCURRENCY = _EMBEDDING_SETTINGS.max_concurrency
-BATCH_SIZE = _EMBEDDING_SETTINGS.batch_size
-TOP_K_RETRIEVE = 3
-_EMBEDDING_SEMAPHORE = threading.BoundedSemaphore(EMBEDDING_MAX_CONCURRENCY)
-MAX_EMBEDDING_INPUT_CHARS = _EMBEDDING_SETTINGS.max_input_chars
-RETRY_HTTP_400 = _EMBEDDING_SETTINGS.retry_http_400
+_EMBEDDING_SEMAPHORES: Dict[int, threading.BoundedSemaphore] = {}
 
 
-def _prepare_embedding_text(text: Any) -> str:
+def _embedding_semaphore(max_concurrency: int) -> threading.BoundedSemaphore:
+    max_concurrency = max(1, int(max_concurrency or 1))
+    if max_concurrency not in _EMBEDDING_SEMAPHORES:
+        _EMBEDDING_SEMAPHORES[max_concurrency] = threading.BoundedSemaphore(max_concurrency)
+    return _EMBEDDING_SEMAPHORES[max_concurrency]
+
+
+def _prepare_embedding_text(text: Any, max_chars: int) -> str:
     value = str(text or "").replace("\x00", " ")
     value = re.sub(r"\s+", " ", value).strip()
     if not value:
         return "[empty]"
-    return value[:MAX_EMBEDDING_INPUT_CHARS]
-
-MIN_SIMILARITY = 0.0
-
-MAX_TOKENS_TASK_DECOMPOSITION = 2048
-MAX_TOKENS_REWRITE = 8192
-
-TEMPERATURE_TASK_DECOMPOSITION = 0.3
-TEMPERATURE_REWRITE = 0.3
-TOP_P_DEFAULT = 1.0
+    return value[:max_chars]
 
 
 from prompts.experience_retrieval_templates import (
@@ -109,6 +99,8 @@ class ExperienceRetriever:
         llm_client: Optional[Any] = None,  # ExperienceLLM instance for task decomposition
         experience_library_path: Optional[str] = None,  # Path to experience library JSON file
     ):
+        self.embedding_settings = EmbeddingSettings.from_runtime()
+        self.retrieval_settings = ExperienceRetrievalSettings.from_runtime()
         self.experiences = normalize_experience_library(experiences)
         self.embedding_model = embedding_model
         self.cache_dir = cache_dir
@@ -217,7 +209,9 @@ class ExperienceRetriever:
         except Exception:
             response_text = ""
 
-        if status_code in {401, 403, 404} or (status_code == 400 and not RETRY_HTTP_400):
+        if status_code in {401, 403, 404} or (
+            status_code == 400 and not self.embedding_settings.retry_http_400
+        ):
             logger.error(
                 f"{prefix} API request failed with non-retryable status {status_code}: {exc}; "
                 f"body={response_text}"
@@ -246,13 +240,19 @@ class ExperienceRetriever:
         time.sleep(wait_time)
         return True
 
-    def _post_embedding_request(self, payload: dict, max_retries: int = MAX_RETRIES, is_batch: bool = False) -> Optional[dict]:
+    def _post_embedding_request(self, payload: dict, max_retries: Optional[int] = None, is_batch: bool = False) -> Optional[dict]:
         """POST to the embedding API with bounded retries."""
+        max_retries = self.embedding_settings.max_retries if max_retries is None else max_retries
         url, headers, prefix = self._embedding_request_context(is_batch)
         for attempt in range(max_retries):
             try:
-                with _EMBEDDING_SEMAPHORE:
-                    response = requests.post(url, headers=headers, json=payload, timeout=API_TIMEOUT)
+                with _embedding_semaphore(self.embedding_settings.max_concurrency):
+                    response = requests.post(
+                        url,
+                        headers=headers,
+                        json=payload,
+                        timeout=self.embedding_settings.timeout,
+                    )
                 response.raise_for_status()
                 return response.json()
             except requests.exceptions.Timeout as e:
@@ -267,8 +267,11 @@ class ExperienceRetriever:
                 return None
         return None
 
-    def _generate_embedding(self, text: str, max_retries: int = MAX_RETRIES) -> Optional[np.ndarray]:
-        payload = {"model": self.embedding_model, "input": _prepare_embedding_text(text)}
+    def _generate_embedding(self, text: str, max_retries: Optional[int] = None) -> Optional[np.ndarray]:
+        payload = {
+            "model": self.embedding_model,
+            "input": _prepare_embedding_text(text, self.embedding_settings.max_input_chars),
+        }
         data = self._post_embedding_request(payload, max_retries=max_retries, is_batch=False)
         if not data:
             return None
@@ -282,14 +285,18 @@ class ExperienceRetriever:
     def _generate_embeddings_batch(
         self,
         texts: List[str],
-        batch_size: int = BATCH_SIZE,
-        max_retries: int = MAX_RETRIES,
+        batch_size: Optional[int] = None,
+        max_retries: Optional[int] = None,
     ) -> List[Optional[np.ndarray]]:
         all_embeddings = []
+        batch_size = self.embedding_settings.batch_size if batch_size is None else batch_size
         total_batches = (len(texts) + batch_size - 1) // batch_size
-        
+
         for i in range(0, len(texts), batch_size):
-            batch_texts = [_prepare_embedding_text(text) for text in texts[i:i + batch_size]]
+            batch_texts = [
+                _prepare_embedding_text(text, self.embedding_settings.max_input_chars)
+                for text in texts[i:i + batch_size]
+            ]
             batch_num = i // batch_size + 1
             
             batch_embeddings = self._generate_embeddings_batch_api(batch_texts, max_retries=max_retries)
@@ -300,10 +307,13 @@ class ExperienceRetriever:
                 print(f"  Progress: batch {batch_num}/{total_batches} ({successful}/{len(batch_texts)} successful)")
         return all_embeddings
     
-    def _generate_embeddings_batch_api(self, texts: List[str], max_retries: int = MAX_RETRIES) -> List[Optional[np.ndarray]]:
+    def _generate_embeddings_batch_api(self, texts: List[str], max_retries: Optional[int] = None) -> List[Optional[np.ndarray]]:
         if not texts:
             return []
-        prepared_texts = [_prepare_embedding_text(text) for text in texts]
+        prepared_texts = [
+            _prepare_embedding_text(text, self.embedding_settings.max_input_chars)
+            for text in texts
+        ]
         payload = {"model": self.embedding_model, "input": prepared_texts}
         data = self._post_embedding_request(payload, max_retries=max_retries, is_batch=True)
         if not data:
@@ -414,7 +424,7 @@ class ExperienceRetriever:
         exp_texts = [get_experience_content(self.experiences[exp_id]) for exp_id in exp_ids]
         
         start_time = time.time()
-        embeddings = self._generate_embeddings_batch(exp_texts, batch_size=BATCH_SIZE)
+        embeddings = self._generate_embeddings_batch(exp_texts)
         elapsed = time.time() - start_time
         
         successful_count = 0
@@ -455,7 +465,7 @@ class ExperienceRetriever:
             if exp_ids_to_embed:
                 print(f"  Updating embeddings for {len(exp_ids_to_embed)} experiences ({len(new_exp_ids)} new, {len(updated_exp_ids)} updated)...")
                 exp_texts = [get_experience_content(self.experiences[exp_id]) for exp_id in exp_ids_to_embed]
-                embeddings = self._generate_embeddings_batch(exp_texts, batch_size=BATCH_SIZE)
+                embeddings = self._generate_embeddings_batch(exp_texts)
                 
                 for exp_id, emb in zip(exp_ids_to_embed, embeddings):
                     if emb is not None:
@@ -521,12 +531,18 @@ class ExperienceRetriever:
     def retrieve(
         self,
         query: str,
-        top_k: int = TOP_K_RETRIEVE,
-        min_similarity: float = MIN_SIMILARITY,
+        top_k: Optional[int] = None,
+        min_similarity: Optional[float] = None,
         images: Optional[List[Any]] = None,
-        mmr_lambda: float = 0.7,
+        mmr_lambda: Optional[float] = None,
     ) -> Tuple[Dict[str, str], Dict[str, Any]]:
         """Retrieve top-k experiences for a query using MMR for diversity."""
+        top_k = self.retrieval_settings.top_k if top_k is None else top_k
+        min_similarity = (
+            self.retrieval_settings.min_similarity
+            if min_similarity is None
+            else min_similarity
+        )
         empty_info = _retrieval_info(original_query=query, decomposition_used=False)
         if not self._experience_embeddings:
             logger.warning("No experience embeddings available, returning empty result")
@@ -538,6 +554,7 @@ class ExperienceRetriever:
             logger.warning("Failed to generate query embedding, returning empty result")
             return {}, empty_info
 
+        mmr_lambda = self.retrieval_settings.mmr_lambda if mmr_lambda is None else mmr_lambda
         exp_ids, exp_matrix, sim_scores = self._score_experiences(query_embedding)
         top_similarities = self._select_top_similarities(
             exp_ids, exp_matrix, sim_scores, top_k, min_similarity, mmr_lambda
@@ -672,9 +689,9 @@ class ExperienceRetriever:
             user_content = _build_multimodal_user_content(RETRIEVAL_IMAGE_DESCRIPTION_PROMPT, images[:1])
             resp = self.llm_client._call_api(
                 user_content=user_content,
-                max_tokens=128,
-                temperature=0.1,
-                top_p=1.0,
+                max_tokens=self.retrieval_settings.image_description_max_tokens,
+                temperature=self.retrieval_settings.image_description_temperature,
+                top_p=self.retrieval_settings.top_p,
                 api_name="Experience API",
                 require_chat_completions=True,
                 return_placeholder_on_error=False,
@@ -702,20 +719,25 @@ class ExperienceRetriever:
         
         prompt = TASK_DECOMPOSITION_PROMPT.format(task_description=task_description)
         
-        for attempt in range(MAX_RETRIES):
+        max_retries = self.embedding_settings.max_retries
+        for attempt in range(max_retries):
             try:
                 if images:
                     user_content = _build_multimodal_user_content(prompt, images)
                     response = self.llm_client._call_api(
                         user_content=user_content,
-                        max_tokens=MAX_TOKENS_TASK_DECOMPOSITION,
-                        temperature=TEMPERATURE_TASK_DECOMPOSITION,
-                        top_p=TOP_P_DEFAULT,
+                        max_tokens=self.retrieval_settings.task_decomposition_max_tokens,
+                        temperature=self.retrieval_settings.task_decomposition_temperature,
+                        top_p=self.retrieval_settings.top_p,
                         api_name="Experience API",
                         require_chat_completions=True
                     )
                 else:
-                    response = self.llm_client.chat(prompt, max_tokens=MAX_TOKENS_TASK_DECOMPOSITION, temperature=TEMPERATURE_TASK_DECOMPOSITION)
+                    response = self.llm_client.chat(
+                        prompt,
+                        max_tokens=self.retrieval_settings.task_decomposition_max_tokens,
+                        temperature=self.retrieval_settings.task_decomposition_temperature,
+                    )
                 
                 subtasks = parse_llm_json_list(response.strip())
                 if subtasks and all(
@@ -728,17 +750,17 @@ class ExperienceRetriever:
                     raise ValueError("LLM returned invalid subtask format")
                     
             except (json.JSONDecodeError, ValueError) as e:
-                if attempt < MAX_RETRIES - 1:
-                    logger.warning(f"Task decomposition failed (attempt {attempt + 1}/{MAX_RETRIES}): {e}, retrying...")
+                if attempt < max_retries - 1:
+                    logger.warning(f"Task decomposition failed (attempt {attempt + 1}/{max_retries}): {e}, retrying...")
                     time.sleep(2 ** attempt)
                 else:
-                    logger.warning(f"Task decomposition failed after {MAX_RETRIES} attempts: {e}, falling back to single query")
+                    logger.warning(f"Task decomposition failed after {max_retries} attempts: {e}, falling back to single query")
             except Exception as e:
-                if attempt < MAX_RETRIES - 1:
-                    logger.warning(f"LLM decomposition failed (attempt {attempt + 1}/{MAX_RETRIES}): {e}, retrying...")
+                if attempt < max_retries - 1:
+                    logger.warning(f"LLM decomposition failed (attempt {attempt + 1}/{max_retries}): {e}, retrying...")
                     time.sleep(2 ** attempt)
                 else:
-                    logger.warning(f"LLM decomposition failed after {MAX_RETRIES} attempts: {e}, falling back to single query")
+                    logger.warning(f"LLM decomposition failed after {max_retries} attempts: {e}, falling back to single query")
         
         return [{
             "type": "general",
@@ -748,20 +770,27 @@ class ExperienceRetriever:
     def retrieve_with_decomposition(
         self,
         task_description: str,
-        top_k: int = TOP_K_RETRIEVE,
-        min_similarity: float = MIN_SIMILARITY,
+        top_k: Optional[int] = None,
+        min_similarity: Optional[float] = None,
         subtask_top_k: Optional[int] = None,
         images: Optional[List[Any]] = None,
     ) -> Tuple[Dict[str, str], Dict[str, Any]]:
         """Retrieve by LLM task decomposition, then merge unique subtask results."""
+        top_k = self.retrieval_settings.top_k if top_k is None else top_k
+        min_similarity = (
+            self.retrieval_settings.min_similarity
+            if min_similarity is None
+            else min_similarity
+        )
         if not self.llm_client:
             raise ValueError(
                 "LLM client is required for decomposition-based retrieval. "
                 "Pass llm_client to ExperienceRetriever.__init__ or use retrieve() instead"
             )
 
-        if len(self.experiences) <= 20:
-            print(f"  [Decomposition] Library size {len(self.experiences)} <= 20, using direct MMR retrieval")
+        direct_limit = self.retrieval_settings.decomposition_direct_max_experiences
+        if len(self.experiences) <= direct_limit:
+            print(f"  [Decomposition] Library size {len(self.experiences)} <= {direct_limit}, using direct MMR retrieval")
             return self._retrieve_direct_and_remember(task_description, top_k, min_similarity, images)
 
         if subtask_top_k is None:
@@ -805,18 +834,23 @@ def _rewrite_prompt(experiences: Dict[str, str], task_description: str) -> str:
 
 
 def _call_rewrite_llm(llm_client: Any, prompt: str, images: Optional[List[Any]]) -> str:
+    settings = ExperienceRetrievalSettings.from_runtime()
     if images:
         return llm_client._call_api(
             user_content=_build_multimodal_user_content(prompt, images),
-            max_tokens=MAX_TOKENS_REWRITE,
-            temperature=TEMPERATURE_REWRITE,
-            top_p=TOP_P_DEFAULT,
+            max_tokens=settings.rewrite_max_tokens,
+            temperature=settings.rewrite_temperature,
+            top_p=settings.top_p,
             system_prompt=EXPERIENCE_REWRITE_SYSTEM_PROMPT,
             api_name="Experience Rewrite API",
             require_chat_completions=True,
             return_placeholder_on_error=False,
         )
-    return llm_client.chat(prompt, max_tokens=MAX_TOKENS_REWRITE, temperature=TEMPERATURE_REWRITE)
+    return llm_client.chat(
+        prompt,
+        max_tokens=settings.rewrite_max_tokens,
+        temperature=settings.rewrite_temperature,
+    )
 
 
 def rewrite_experiences_for_task(

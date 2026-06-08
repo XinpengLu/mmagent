@@ -14,6 +14,7 @@ from experience.schema import (
     mark_low_information_success,
     normalize_experience_library,
 )
+from .config import SkillSettings
 from .filters import (
     allow_unvalidated_recovery_inference,
     experience_failed_validation,
@@ -24,6 +25,10 @@ from .filters import (
 )
 from utils.json_utils import parse_llm_json_object
 from .utils import load_memory_prompt, truncate_text
+
+
+def _settings() -> SkillSettings:
+    return SkillSettings.from_runtime()
 
 
 def _format_skill_candidate_for_rerank(skill: Dict[str, Any], max_chars: int = 1800) -> str:
@@ -431,7 +436,12 @@ def rerank_memory_with_llm(
     )
 
     try:
-        response = llm.chat(prompt, max_tokens=2048, temperature=0.0)
+        settings = _settings()
+        response = llm.chat(
+            prompt,
+            max_tokens=settings.rerank_max_tokens,
+            temperature=settings.rerank_temperature,
+        )
         selected_skills, selected_experiences, skill_ids, exp_ids, dropped_skill_ids, parsed = (
             _select_from_rerank_response(
                 response,

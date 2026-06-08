@@ -6,15 +6,12 @@ import random
 import json
 import requests
 
-from utils.env import env_float, env_int
-
 NON_RETRYABLE_STATUS_CODES = {400, 401, 403, 404}
-
-API_TIMEOUT = 240
-BASE_WAIT_TIME = env_float("REASONING_API_BASE_WAIT", 1.0)
-MAX_WAIT_TIME = env_float("REASONING_API_MAX_WAIT", 30.0)
-HIGH_TOKEN_THRESHOLD = 25000
-DEFAULT_MAX_RETRIES = max(1, env_int("REASONING_API_MAX_RETRIES", 3))
+API_TIMEOUT_SECONDS = 240
+API_BASE_WAIT_SECONDS = 1.0
+API_MAX_WAIT_SECONDS = 30.0
+API_HIGH_TOKEN_WARNING_THRESHOLD = 25000
+API_MAX_RETRIES = 3
 
 
 def _is_openai_reasoning_model(model_name: str) -> bool:
@@ -78,7 +75,12 @@ def _add_reasoning_param(payload: dict, model_name: str, end_point: str = None):
 
 def _make_api_request(end_point: str, headers: dict, payload: dict, api_name: str = "API"):
     try:
-        response = requests.post(end_point, headers=headers, json=payload, timeout=API_TIMEOUT)
+        response = requests.post(
+            end_point,
+            headers=headers,
+            json=payload,
+            timeout=API_TIMEOUT_SECONDS,
+        )
         if response.status_code == 429:
             return response, "429"
         return response, None
@@ -95,8 +97,8 @@ def _make_api_request(end_point: str, headers: dict, payload: dict, api_name: st
 
 def _retry_wait(attempt: int) -> float:
     """Exponential backoff with jitter for transient API failures."""
-    wait_time = BASE_WAIT_TIME * (2 ** attempt) + random.uniform(0, 1)
-    return min(wait_time, MAX_WAIT_TIME)
+    wait_time = API_BASE_WAIT_SECONDS * (2 ** attempt) + random.uniform(0, 1)
+    return min(wait_time, API_MAX_WAIT_SECONDS)
 
 
 def _max_retry_count(value) -> int:
@@ -200,7 +202,7 @@ def _parse_empty_or_invalid_choices(result: dict, api_name: str, attempt: int, m
     print(f"[{api_name}] Usage: prompt_tokens={prompt_tokens}, completion_tokens={completion_tokens}")
     if "error" in result:
         print(f"[{api_name}] Error details: {result['error']}")
-    if prompt_tokens > HIGH_TOKEN_THRESHOLD:
+    if prompt_tokens > API_HIGH_TOKEN_WARNING_THRESHOLD:
         print(f"[{api_name}] Warning: Very high prompt_tokens ({prompt_tokens}), may have hit token limit")
     print(f"[{api_name}] Possible causes: content filtering, safety policy, token limit, or model overload")
     return None, False, "empty_choices"
@@ -333,7 +335,7 @@ def _call_primary_api(primary, model_name, messages, sampling_params, max_retrie
 def call_vision_api(model_name: str, messages: list, sampling_params: dict, max_retries: int = None, tools: list = None):
     """Call the reasoning API with bounded retries."""
     if max_retries is None:
-        max_retries = DEFAULT_MAX_RETRIES
+        max_retries = API_MAX_RETRIES
     max_retries = _max_retry_count(max_retries)
     primary = _api_configs()
     return _call_primary_api(primary, model_name, messages, sampling_params, max_retries, tools)

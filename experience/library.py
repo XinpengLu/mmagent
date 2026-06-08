@@ -11,8 +11,10 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 from prompts.experience_generation_templates import EXPERIENCE_REFINE_PROMPT, MERGE_PROMPT
 
-from utils.env import env_bool, env_int, safe_float
+from configs.runtime import runtime_setting
+from utils.env import env_bool, safe_float
 from utils.json_utils import parse_llm_json_list
+from .config import ExperienceLibrarySettings
 from .llm_client import ExperienceLLM
 from .retriever import ExperienceRetriever
 from .schema import (
@@ -28,10 +30,8 @@ from .schema import (
 from .utils import _write_debug_texts
 
 
-MAX_RETRIES = 3
-SIMILARITY_THRESHOLD = 0.70
-SIMILARITY_THRESHOLD_REDUCTION = 0.60
-TOP_K_SIMILARITY_SEARCH = 10
+def _settings() -> ExperienceLibrarySettings:
+    return ExperienceLibrarySettings.from_runtime()
 
 
 def _record_task_tags(record: Any) -> set:
@@ -237,10 +237,12 @@ class _ExperienceMemoryProvider:
 def _llm_merge_experiences(
     candidates: List[Tuple[str, Any, float]],
     llm: ExperienceLLM,
-    max_retries: int = MAX_RETRIES,
+    max_retries: Optional[int] = None,
 ) -> Optional[str]:
     if len(candidates) < 2:
         return None
+    settings = _settings()
+    max_retries = settings.max_retries if max_retries is None else max_retries
 
     exp_list = [
         f"[{exp_id}] (similarity: {score:.3f})\n{format_experience_for_prompt(exp_id, record)}"
@@ -267,9 +269,12 @@ def _process_add_with_merge(
     provider: _ExperienceMemoryProvider,
     operation: Dict[str, Any],
     llm: ExperienceLLM,
-    similarity_threshold: float = SIMILARITY_THRESHOLD,
+    similarity_threshold: Optional[float] = None,
+    max_retries: Optional[int] = None,
     next_id: int = 0,
 ) -> Tuple[str, bool]:
+    settings = _settings()
+    similarity_threshold = settings.merge_similarity_threshold if similarity_threshold is None else similarity_threshold
     exp_id = f"E{next_id}"
     new_record = mark_low_information_success(_make_record_for_id(exp_id, operation))
     new_text = get_experience_content(new_record)
@@ -287,7 +292,7 @@ def _process_add_with_merge(
     query_emb = new_emb[0] if len(new_emb.shape) == 2 else new_emb
     candidates = provider.search_similar(
         query_emb,
-        top_k=TOP_K_SIMILARITY_SEARCH,
+        top_k=settings.similarity_search_top_k,
         similarity_threshold=similarity_threshold,
     )
     new_kind = get_experience_kind(new_record)
@@ -305,7 +310,7 @@ def _process_add_with_merge(
 
     print(f"  - Found {len(candidates)} similar experiences (threshold: {similarity_threshold:.2f}), merging...")
     all_candidates = [("NEW", new_record, 1.0)] + candidates
-    merged_text = _llm_merge_experiences(all_candidates, llm)
+    merged_text = _llm_merge_experiences(all_candidates, llm, max_retries=max_retries)
 
     if merged_text:
         for cand_id, _, _ in candidates:
@@ -362,6 +367,7 @@ def _apply_batch_operations(
     *,
     llm: ExperienceLLM,
     similarity_threshold: float,
+    max_retries: Optional[int],
 ) -> Tuple[int, int, List[dict]]:
     max_id = _max_exp_id(provider.experiences)
     to_modify = []
@@ -378,7 +384,14 @@ def _apply_batch_operations(
             continue
         if option in {"add", "modify"}:
             max_id += 1
-            _, was_merged = _process_add_with_merge(provider, operation, llm, similarity_threshold, max_id)
+            _, was_merged = _process_add_with_merge(
+                provider,
+                operation,
+                llm,
+                similarity_threshold=similarity_threshold,
+                max_retries=max_retries,
+                next_id=max_id,
+            )
             add_count += 1
             merge_count += int(was_merged)
 
@@ -407,8 +420,8 @@ def _limit_experience_library(
         return experiences
 
     overflow = len(experiences) - experience_limit
-    fast_prune_enabled = env_bool("ENABLE_FAST_EXPERIENCE_LIMIT_PRUNE", True)
-    fast_prune_overflow = env_int("FAST_EXPERIENCE_PRUNE_MAX_OVERFLOW", 12)
+    fast_prune_enabled = bool(runtime_setting("experience.fast_prune.enabled", True))
+    fast_prune_overflow = int(runtime_setting("experience.fast_prune.max_overflow", 12))
     if fast_prune_enabled and overflow <= fast_prune_overflow:
         print(
             f"  - Current library size ({len(experiences)}) exceeds limit ({experience_limit}) "
@@ -448,14 +461,16 @@ def batch_merge(
     existing: Dict[str, Any],
     updates: List[dict],
     llm: ExperienceLLM,
-    max_retries: int = MAX_RETRIES,
+    max_retries: Optional[int] = None,
     debug_dir: Optional[str] = None,
     experience_limit: Optional[int] = None,
-    similarity_threshold: float = SIMILARITY_THRESHOLD,
+    similarity_threshold: Optional[float] = None,
     retriever: Optional[ExperienceRetriever] = None,
 ) -> ExperienceLibrary:
     """Merge generated operations into the canonical experience library."""
     existing = normalize_experience_library(existing)
+    settings = _settings()
+    similarity_threshold = settings.merge_similarity_threshold if similarity_threshold is None else similarity_threshold
     if not updates:
         return _reduce_existing_if_needed(
             existing,
@@ -472,6 +487,7 @@ def batch_merge(
         updates,
         llm=llm,
         similarity_threshold=similarity_threshold,
+        max_retries=max_retries,
     )
 
     print(f"  - Batch update: {len(updates)} updates -> {len(to_modify)} modifies, {add_count} adds ({merge_count} merged)")
@@ -588,11 +604,14 @@ def _reduce_experiences_to_limit(
     limit: int,
     llm: ExperienceLLM,
     debug_dir: Optional[str] = None,
-    max_rounds: int = 3,
-    similarity_threshold: float = SIMILARITY_THRESHOLD_REDUCTION,
+    max_rounds: Optional[int] = None,
+    similarity_threshold: Optional[float] = None,
     retriever: Optional[ExperienceRetriever] = None,
 ) -> ExperienceLibrary:
     current = normalize_experience_library(experiences)
+    settings = _settings()
+    max_rounds = settings.reduction_max_rounds if max_rounds is None else max_rounds
+    similarity_threshold = settings.reduction_similarity_threshold if similarity_threshold is None else similarity_threshold
     round_idx = 0
     print(f"    - Starting reduction: {len(current)} experiences, target <= {limit}")
     provider = _ExperienceMemoryProvider(current, retriever=retriever)
@@ -681,7 +700,16 @@ def _refine_prompt(experiences: ExperienceLibrary) -> str:
     )
 
 
-def _chat_with_retries(llm: ExperienceLLM, prompt: str, *, max_retries: int, label: str, max_tokens: int = 16384):
+def _chat_with_retries(
+    llm: ExperienceLLM,
+    prompt: str,
+    *,
+    max_retries: int,
+    label: str,
+    max_tokens: Optional[int] = None,
+):
+    settings = _settings()
+    max_tokens = settings.refine_max_tokens if max_tokens is None else max_tokens
     for attempt in range(max_retries):
         try:
             return llm.chat(prompt, max_tokens=max_tokens)
@@ -766,12 +794,14 @@ def refine_experience_library(
     experiences: Dict[str, Any],
     llm: ExperienceLLM,
     debug_dir: Optional[str] = None,
-    max_retries: int = MAX_RETRIES,
+    max_retries: Optional[int] = None,
 ) -> ExperienceLibrary:
     """Run a global merge/delete refinement pass when the library is large."""
     experiences = normalize_experience_library(experiences)
     if not experiences or len(experiences) < 10:
         return experiences
+    settings = _settings()
+    max_retries = settings.max_retries if max_retries is None else max_retries
 
     print(f"  [Refine] Starting library refinement: {len(experiences)} experiences")
     prompt = _refine_prompt(experiences)

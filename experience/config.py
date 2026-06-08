@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
-from utils.env import env_bool, env_float, env_int
+from configs.runtime import runtime_setting
 
 
 @dataclass(frozen=True)
@@ -23,9 +23,9 @@ class ExperienceLLMSettings:
     def from_env(cls, model_name: Optional[str] = None) -> "ExperienceLLMSettings":
         return cls(
             model_name=model_name or os.environ.get("EXPERIENCE_MODEL_NAME", "gpt-4o"),
-            max_retries=env_int("EXPERIENCE_API_MAX_RETRIES", 3),
-            base_wait=env_float("EXPERIENCE_API_BASE_WAIT", 1.0),
-            max_wait=env_float("EXPERIENCE_API_MAX_WAIT", 30.0),
+            max_retries=3,
+            base_wait=1.0,
+            max_wait=30.0,
         )
 
 
@@ -42,25 +42,27 @@ class ExperienceGenerationSettings:
     trajectory_max_other_field_chars: int
     trajectory_image_budget: int
     trajectory_tool_images_per_rollout: int
-    caption_include_system_prompt: bool
-    caption_tool_with_original: bool
+    caption_max_tokens: int
+    caption_workers: int
+    caption_temperature: float
 
     @classmethod
-    def from_env(cls) -> "ExperienceGenerationSettings":
+    def from_runtime(cls) -> "ExperienceGenerationSettings":
         return cls(
-            critique_retries=env_int("EXPERIENCE_CRITIQUE_MAX_RETRIES", 3),
-            critique_max_tokens=env_int("EXPERIENCE_CRITIQUE_MAX_TOKENS", 4096),
-            trajectory_retries=env_int("TRAJ_SUMMARY_MAX_RETRIES", 3),
-            trajectory_max_tokens=env_int("TRAJ_SUMMARY_MAX_TOKENS", 4096),
-            trajectory_max_initial_prompt_chars=env_int("TRAJ_SUMMARY_MAX_INITIAL_PROMPT_CHARS", 12000),
-            trajectory_max_text_output_chars=env_int("TRAJ_SUMMARY_MAX_TEXT_OUTPUT_CHARS", 6000),
-            trajectory_max_tool_code_chars=env_int("TRAJ_SUMMARY_MAX_TOOL_CODE_CHARS", 6000),
-            trajectory_max_tool_result_chars=env_int("TRAJ_SUMMARY_MAX_TOOL_RESULT_CHARS", 8000),
-            trajectory_max_other_field_chars=env_int("TRAJ_SUMMARY_MAX_OTHER_FIELD_CHARS", 3000),
-            trajectory_image_budget=env_int("TRAJ_SUMMARY_IMAGE_BUDGET", 12),
-            trajectory_tool_images_per_rollout=env_int("TRAJ_SUMMARY_TOOL_IMAGES_PER_ROLLOUT", 3),
-            caption_include_system_prompt=env_bool("TRAJ_SUMMARY_IMAGE_CAPTION_INCLUDE_SYSTEM_PROMPT", False),
-            caption_tool_with_original=env_bool("TRAJ_SUMMARY_CAPTION_TOOL_WITH_ORIGINAL", False),
+            critique_retries=3,
+            critique_max_tokens=4096,
+            trajectory_retries=3,
+            trajectory_max_tokens=4096,
+            trajectory_max_initial_prompt_chars=12000,
+            trajectory_max_text_output_chars=6000,
+            trajectory_max_tool_code_chars=6000,
+            trajectory_max_tool_result_chars=8000,
+            trajectory_max_other_field_chars=3000,
+            trajectory_image_budget=int(runtime_setting("rollout.summary_image_budget", 12)),
+            trajectory_tool_images_per_rollout=int(runtime_setting("rollout.summary_tool_images_per_rollout", 3)),
+            caption_max_tokens=512,
+            caption_workers=int(runtime_setting("experience.image_caption_workers", 4)),
+            caption_temperature=0.3,
         )
 
 
@@ -74,12 +76,64 @@ class EmbeddingSettings:
     retry_http_400: bool
 
     @classmethod
-    def from_env(cls) -> "EmbeddingSettings":
+    def from_runtime(cls) -> "EmbeddingSettings":
         return cls(
-            max_retries=env_int("EXPERIENCE_EMBEDDING_MAX_RETRIES", 3),
-            timeout=env_int("EXPERIENCE_EMBEDDING_TIMEOUT", 60),
-            max_concurrency=max(1, env_int("EXPERIENCE_EMBEDDING_MAX_CONCURRENCY", 4)),
-            batch_size=max(1, env_int("EXPERIENCE_EMBEDDING_BATCH_SIZE", 30)),
-            max_input_chars=max(256, env_int("EXPERIENCE_EMBEDDING_MAX_INPUT_CHARS", 12000)),
-            retry_http_400=env_bool("EXPERIENCE_EMBEDDING_RETRY_400", True),
+            max_retries=3,
+            timeout=60,
+            max_concurrency=4,
+            batch_size=30,
+            max_input_chars=12000,
+            retry_http_400=True,
+        )
+
+
+@dataclass(frozen=True)
+class ExperienceRetrievalSettings:
+    top_k: int
+    min_similarity: float
+    task_decomposition_max_tokens: int
+    rewrite_max_tokens: int
+    task_decomposition_temperature: float
+    rewrite_temperature: float
+    top_p: float
+    mmr_lambda: float
+    image_description_max_tokens: int
+    image_description_temperature: float
+    decomposition_direct_max_experiences: int
+
+    @classmethod
+    def from_runtime(cls) -> "ExperienceRetrievalSettings":
+        return cls(
+            top_k=max(1, int(runtime_setting("experience.retrieval.top_k", 3))),
+            min_similarity=float(runtime_setting("experience.retrieval.min_similarity", 0.0)),
+            task_decomposition_max_tokens=2048,
+            rewrite_max_tokens=8192,
+            task_decomposition_temperature=0.3,
+            rewrite_temperature=0.3,
+            top_p=1.0,
+            mmr_lambda=float(runtime_setting("experience.retrieval.mmr_lambda", 0.7)),
+            image_description_max_tokens=128,
+            image_description_temperature=0.1,
+            decomposition_direct_max_experiences=int(runtime_setting("experience.retrieval.direct_max_experiences", 20)),
+        )
+
+
+@dataclass(frozen=True)
+class ExperienceLibrarySettings:
+    max_retries: int
+    merge_similarity_threshold: float
+    reduction_similarity_threshold: float
+    similarity_search_top_k: int
+    reduction_max_rounds: int
+    refine_max_tokens: int
+
+    @classmethod
+    def from_runtime(cls) -> "ExperienceLibrarySettings":
+        return cls(
+            max_retries=3,
+            merge_similarity_threshold=float(runtime_setting("experience.library.merge_similarity_threshold", 0.70)),
+            reduction_similarity_threshold=float(runtime_setting("experience.library.reduction_similarity_threshold", 0.60)),
+            similarity_search_top_k=int(runtime_setting("experience.library.similarity_top_k", 10)),
+            reduction_max_rounds=int(runtime_setting("experience.library.reduction_max_rounds", 3)),
+            refine_max_tokens=16384,
         )

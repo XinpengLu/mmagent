@@ -241,7 +241,7 @@ def _build_query(sample, args) -> _MemoryQuery:
     base_query_text = sample.get('problem', sample.get('question', ''))
     metadata_context = (
         sample_metadata_context(sample)
-        if os.environ.get("ENABLE_METADATA_RETRIEVAL_CONTEXT", "0") == "1"
+        if env_bool("ENABLE_METADATA_RETRIEVAL_CONTEXT", False)
         else ""
     )
     query_text = (

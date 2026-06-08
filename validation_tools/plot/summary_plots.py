@@ -49,7 +49,7 @@ def _setup_matplotlib():
     return plt
 
 
-def _plot_performance(path: Path, rows: List[Dict[str, Any]], target_average: float) -> Path | None:
+def _plot_performance(path: Path, rows: List[Dict[str, Any]]) -> Path | None:
     if not rows:
         return None
 
@@ -71,7 +71,6 @@ def _plot_performance(path: Path, rows: List[Dict[str, Any]], target_average: fl
     if _has_nonzero(rows, "train_pass_at_k"):
         ax.plot(xs, _values(rows, "train_pass_at_k"), marker="^", color=COLORS["purple"], label="train pass@k")
 
-    ax.axhline(target_average, color=COLORS["gray"], linestyle=":", linewidth=1.4, label=f"target {target_average:.2f}")
     ax.set_xlabel("training stage")
     ax.set_ylabel("score")
     ax.set_ylim(0.0, 1.02)
@@ -140,7 +139,7 @@ def _plot_memory(path: Path, rows: List[Dict[str, Any]]) -> Path | None:
     return _save_figure(fig, path)
 
 
-def _plot_diagnostics(path: Path, rows: List[Dict[str, Any]], target_average: float) -> Path | None:
+def _plot_diagnostics(path: Path, rows: List[Dict[str, Any]]) -> Path | None:
     if not rows:
         return None
 
@@ -154,7 +153,6 @@ def _plot_diagnostics(path: Path, rows: List[Dict[str, Any]], target_average: fl
     ax.plot(xs, _values(rows, "best_average_so_far"), linestyle="--", color=COLORS["black"], label="best average")
     if _has_nonzero(rows, "train_average_at_k"):
         ax.plot(xs, _values(rows, "train_average_at_k"), marker="D", color=COLORS["green"], label="train average@k")
-    ax.axhline(target_average, color=COLORS["gray"], linestyle=":", linewidth=1.2)
     ax.set_title("Performance")
     ax.set_xlabel("stage")
     ax.set_ylabel("score")
