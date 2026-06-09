@@ -1,5 +1,3 @@
-"""Shared artifact filenames and lightweight JSON helpers."""
-
 from __future__ import annotations
 
 import json

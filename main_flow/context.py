@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from configs.runtime import RuntimeConfig
 
 
 DEFAULT_PROMPT_TOOLS = ("multi_tool_agent", "web_search, visit, code_interpreter")
@@ -20,18 +22,6 @@ BENCHMARK_PROMPT_TOOLS = {
 }
 
 
-def _project_root() -> Path:
-    """Return the mmagent source root regardless of the caller's cwd."""
-    return Path(__file__).resolve().parents[1]
-
-
-def _data_root(default: Path | None = None) -> Path:
-    """Return DATA_ROOT or the mmagent-local data root used by scripts."""
-    root = _project_root()
-    fallback = default or root
-    return Path(os.environ.get("DATA_ROOT", fallback)).resolve()
-
-
 @dataclass(frozen=True)
 class MainFlowContext:
     data_root: Path
@@ -39,14 +29,16 @@ class MainFlowContext:
     split_root: Path
     output_root: Path
     log_root: Path
+    memory_root_base: Path
     system_prompts: Path
     tool_config: Path
-    benchmark_count: int
     settings: dict[str, Any] = field(default_factory=dict)
 
 
 def _count_json_items(path: Path) -> int:
     with path.open("r", encoding="utf-8") as f:
+        if path.suffix == ".jsonl":
+            return sum(1 for line in f if line.strip())
         return len(json.load(f))
 
 
@@ -54,28 +46,16 @@ def _default_prompt_and_tools(benchmark: str) -> tuple[str, str]:
     return BENCHMARK_PROMPT_TOOLS.get(benchmark, DEFAULT_PROMPT_TOOLS)
 
 
-def build_context(benchmark_count: int, runtime=None) -> MainFlowContext:
-    if runtime is not None:
-        return MainFlowContext(
-            data_root=runtime.paths.data_root,
-            bench_root=runtime.paths.bench_root,
-            split_root=runtime.paths.split_root,
-            output_root=runtime.paths.output_root,
-            log_root=runtime.paths.log_root,
-            system_prompts=runtime.paths.system_prompts,
-            tool_config=runtime.paths.tool_config,
-            benchmark_count=benchmark_count,
-            settings=runtime.settings,
-        )
-
-    resolved_data_root = _data_root(_project_root())
+def build_context(runtime: "RuntimeConfig") -> MainFlowContext:
+    paths = runtime.paths
     return MainFlowContext(
-        data_root=resolved_data_root,
-        bench_root=Path(os.environ.get("BENCH_ROOT") or resolved_data_root / "benchmark" / "processed"),
-        split_root=Path(os.environ.get("BENCHMARK_SPLIT_ROOT") or resolved_data_root / "benchmark" / "split"),
-        output_root=Path(os.environ.get("OUTPUT_ROOT") or resolved_data_root / "output" / "full_benchmark"),
-        log_root=Path(os.environ.get("LOG_ROOT") or resolved_data_root / "output" / "full_benchmark" / "_logs"),
-        system_prompts=Path(os.environ.get("SYSTEM_PROMPTS_PATH") or resolved_data_root / "prompts" / "system_prompts.yaml"),
-        tool_config=Path(os.environ.get("TOOL_CONFIG_PATH") or resolved_data_root / "configs" / "tool_configs.yaml"),
-        benchmark_count=benchmark_count,
+        data_root=paths.data_root,
+        bench_root=paths.bench_root,
+        split_root=paths.split_root,
+        output_root=paths.output_root,
+        log_root=paths.log_root,
+        memory_root_base=paths.memory_root_base,
+        system_prompts=paths.system_prompts,
+        tool_config=paths.tool_config,
+        settings=runtime.settings,
     )

@@ -137,7 +137,7 @@ def _extract_reasoning_text(reasoning_details):
     return None
 
 
-def _build_tools_schema():
+def _build_tools_schema(enabled_tools: str = ""):
     enable_fc = os.environ.get("ENABLE_FUNCTION_CALLING", "true")
     if not env_bool("ENABLE_FUNCTION_CALLING", True):
         print(f"[Function Calling] Disabled (ENABLE_FUNCTION_CALLING={enable_fc})")
@@ -147,16 +147,16 @@ def _build_tools_schema():
         from tools import list_tools
 
         all_tools = list_tools()
-        enabled_tools_env = os.environ.get("ENABLED_TOOLS", "").strip()
-        if enabled_tools_env:
-            enabled_tools_list = [tool.strip() for tool in enabled_tools_env.split(",") if tool.strip()]
+        enabled_tools = str(enabled_tools or "").strip()
+        if enabled_tools:
+            enabled_tools_list = [tool.strip() for tool in enabled_tools.split(",") if tool.strip()]
             tool_names = [tool for tool in enabled_tools_list if tool in all_tools]
             missing_tools = [tool for tool in enabled_tools_list if tool not in all_tools]
             if missing_tools:
-                print(f"[Function Calling] Warning: Tools in ENABLED_TOOLS not found in registry: {missing_tools}")
+                print(f"[Function Calling] Warning: enabled tools not found in registry: {missing_tools}")
         else:
             tool_names = all_tools
-            print(f"[Function Calling] ENABLED_TOOLS not set, using all registered tools: {tool_names}")
+            print(f"[Function Calling] No enabled tools configured, using all registered tools: {tool_names}")
 
         return _build_openai_tools_schema(tool_names)
     except Exception as e:
@@ -320,7 +320,7 @@ def _handle_model_action(action, data, node, tool_handler, global_turn_idx):
 def create_model_caller(args, sampling_params, save_dir=None):
     """Create the callable used by the greedy rollout loop."""
     tool_handler = APIToolHandler(args, save_dir)
-    tools_schema = _build_tools_schema()
+    tools_schema = _build_tools_schema(getattr(args, "enabled_tools", ""))
     
     def model_caller(node: AgentState):
         try:

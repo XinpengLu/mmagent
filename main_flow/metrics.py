@@ -31,24 +31,6 @@ def _save_results(results, output_dir):
     print(f"Results saved to {output_file_path}")
 
 
-def _print_summary(results, output_dir):
-    """Print a concise rollout summary; dataset metrics are written separately."""
-    if not results:
-        return
-
-    total = len(results)
-    average_accuracy = sum(r.get("accuracy_score", 0) for r in results) / total
-    average_turns = sum(
-        sum(1 for message in r.get("conversation_history", []) if message.get("role") == "assistant")
-        for r in results
-    ) / total
-    print("\n--- Evaluation Summary ---")
-    print(f"Total samples processed: {total}")
-    print(f"Overall Accuracy Score: {average_accuracy:.4f}")
-    print(f"Average turns per sample: {average_turns:.2f}")
-    print("------------------------\n")
-
-
 def compute_and_save_sample_summary(question_id, sample_rollout_results, rollouts_per_sample, sample_dir):
     """Compute sample-level pass@k, average@k, and rollout diagnostics."""
     if not sample_rollout_results:

@@ -93,7 +93,7 @@ class LLMJudgeClient:
         """Initialize the LLM judge client with environment variables."""
         api_key = os.environ.get("VERIFIER_API_KEY")
         endpoint = os.environ.get("VERIFIER_END_POINT")
-        self.model_name = os.environ.get("VERIFIER_MODEL_NAME", "gpt-4o-2024-11-20")
+        self.model_name = os.environ.get("VERIFIER_MODEL_NAME")
         
         if not api_key or not endpoint:
             raise ValueError(

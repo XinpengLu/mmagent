@@ -1,5 +1,3 @@
-"""Configuration loading for one benchmark phase."""
-
 import json
 import os
 import yaml

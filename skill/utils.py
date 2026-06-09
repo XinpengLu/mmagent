@@ -56,11 +56,25 @@ _GENERIC_CLUSTER_TASK_TAGS = {
 
 CALLABLE_TOOL_NAMES = {"code_interpreter", "web_search", "visit", "image_search", "zoom"}
 DEFAULT_CALLABLE_TOOL_ORDER = ["code_interpreter", "web_search", "image_search", "visit", "zoom"]
+_configured_callable_tools = list(DEFAULT_CALLABLE_TOOL_ORDER)
+
+
+def set_configured_callable_tools(raw: Optional[str]) -> None:
+    """Set phase-local callable tools from the benchmark prompt/tool mapping."""
+    global _configured_callable_tools
+    tools = [
+        tool.strip()
+        for tool in str(raw or "").split(",")
+        if tool.strip() in CALLABLE_TOOL_NAMES
+    ]
+    _configured_callable_tools = tools or list(DEFAULT_CALLABLE_TOOL_ORDER)
 
 
 def configured_callable_tools(raw: Optional[str] = None) -> List[str]:
     """Return enabled callable tools in prompt order."""
-    value = os.environ.get("ENABLED_TOOLS", "") if raw is None else raw
+    if raw is None:
+        return list(_configured_callable_tools)
+    value = raw
     tools = [
         tool.strip()
         for tool in str(value or "").split(",")
