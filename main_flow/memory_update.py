@@ -43,12 +43,12 @@ def _snapshot_skill_memory(args, snapshot_dir):
     import shutil
 
     metadata = {"skill_word_count": 0, "skill_count": 0}
-    if getattr(args, 'skill_library', None) and os.path.exists(args.skill_library):
+    if args.skill_library and os.path.exists(args.skill_library):
         shutil.copy2(args.skill_library, os.path.join(snapshot_dir, os.path.basename(args.skill_library)))
         with open(args.skill_library, 'r', encoding='utf-8') as f:
             metadata["skill_word_count"] = len(f.read().split())
 
-    if not getattr(args, 'skill_library', None):
+    if not args.skill_library:
         return metadata
 
     skill_root = os.path.dirname(args.skill_library)
@@ -87,9 +87,7 @@ def _save_knowledge_snapshot(args, batch_idx):
 
 
 def _generation_worker_count(args, num_tasks):
-    generation_workers = getattr(args, 'experience_generation_workers', None)
-    if generation_workers is None or generation_workers <= 0:
-        generation_workers = getattr(args, 'num_workers', 4) or 4
+    generation_workers = args.experience_generation_workers or args.num_workers
     return max(1, min(num_tasks, int(generation_workers), 16))
 
 
@@ -120,9 +118,9 @@ def _generate_batch_experiences(samples_info, args):
 
 
 def _maybe_refine_experiences(merged, args, is_final):
-    if not getattr(args, 'experience_refine', False):
+    if args.phase != "train":
         return merged
-    max_items = getattr(args, 'experience_max_items', 256)
+    max_items = args.experience_max_items
     if not (is_final or len(merged) > max_items):
         return merged
 
@@ -134,7 +132,7 @@ def _maybe_refine_experiences(merged, args, is_final):
 
 
 def _merge_experience_ops(all_experience_ops, args, is_final):
-    if not (all_experience_ops and getattr(args, 'experience_library_update', False) and args.experience_library):
+    if not (all_experience_ops and args.phase == "train" and args.experience_library):
         return None
 
     with EXPERIENCE_LIBRARY_LOCK:
@@ -145,11 +143,10 @@ def _merge_experience_ops(all_experience_ops, args, is_final):
             all_experience_ops,
             ExperienceLLM(),
             debug_dir=None,
-            experience_limit=getattr(args, 'experience_max_items', 16),
+            experience_limit=args.experience_max_items,
         )
         merge_time = time.time() - merge_start
         merged = _maybe_refine_experiences(merged, args, is_final)
-
         os.makedirs(os.path.dirname(args.experience_library), exist_ok=True)
         exp_save_library(args.experience_library, merged)
         print(f"  [Large Batch] Merged {len(all_experience_ops)} experience operations into library (final size: {len(merged)})")
@@ -158,7 +155,7 @@ def _merge_experience_ops(all_experience_ops, args, is_final):
 
 
 def _maybe_cluster_skills(merged, args):
-    if not (merged is not None and getattr(args, 'skill_enable', False) and getattr(args, 'skill_library', None)):
+    if not (merged is not None and args.skill_library):
         return
     skill_start = time.time()
     merged = cluster_experiences_to_skills(merged, args.skill_library, ExperienceLLM(), args)
@@ -177,6 +174,7 @@ def _update_memory_library(all_experience_ops, args, is_final):
 def _process_large_batch_experiences(samples_info, args, batch_idx=0, is_final=False):
     if not samples_info:
         return 0
+
     start_time = time.time()
     print(f"\n[Large Batch {batch_idx}] Processing experience generation for {len(samples_info)} samples...")
 
@@ -186,7 +184,6 @@ def _process_large_batch_experiences(samples_info, args, batch_idx=0, is_final=F
     all_experience_ops, successful_samples = _generate_batch_experiences(samples_info, args)
     gen_time = time.time() - gen_start
     print(f"  [Timing] Experience generation: {gen_time:.1f}s")
-
     _update_memory_library(all_experience_ops, args, is_final)
 
     total_time = time.time() - start_time
@@ -200,7 +197,7 @@ class TrainingMemoryUpdater:
         self.memory_runtime = memory_runtime
         self.queue = []
         self.batch_idx = 0
-        self.enabled = getattr(args, 'experience_online_generate', False)
+        self.enabled = args.phase == "train"
 
     def extend(self, sample_infos):
         if not self.enabled or not sample_infos:

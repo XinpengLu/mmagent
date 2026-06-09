@@ -1,4 +1,4 @@
-"""Merge, reduce, prune, and refine canonical experience libraries."""
+﻿"""Merge, reduce, prune, and refine canonical experience libraries."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from sklearn.metrics.pairwise import cosine_similarity
 from prompts.experience_generation_templates import EXPERIENCE_REFINE_PROMPT, MERGE_PROMPT
 
 from configs.runtime import runtime_setting
-from utils.env import env_bool, safe_float
 from utils.json_utils import parse_llm_json_list
 from .config import ExperienceLibrarySettings
 from .llm_client import ExperienceLLM
@@ -646,11 +645,11 @@ def _experience_prune_score(exp_id: str, record: Dict[str, Any]) -> float:
     score += 0.6 if record.get("tool_sequence") else 0.0
     score += 0.4 if record.get("validation_checks") else 0.0
     score += 0.3 if record.get("fallback_plan") else 0.0
-    score += 0.6 * safe_float(record.get("confidence"), 0.0)
+    score += 0.6 * float(record.get("confidence", 0.0))
     val_used = int(stats.get("validation_used_count", 0) or 0)
     if val_used:
-        score += safe_float(stats.get("validation_average_score"), 0.0)
-        score += 0.5 * safe_float(stats.get("validation_pass_rate"), 0.0)
+        score += float(stats.get("validation_average_score", 0.0))
+        score += 0.5 * float(stats.get("validation_pass_rate", 0.0))
     if stats.get("low_information_success"):
         score -= 1.0
     if record.get("kind") == "failure" and not record.get("tool_sequence"):
@@ -665,8 +664,6 @@ def _experience_prune_score(exp_id: str, record: Dict[str, Any]) -> float:
 def _prune_experiences_to_limit(experiences: Dict[str, Any], limit: int) -> ExperienceLibrary:
     current = normalize_experience_library(experiences)
     if not isinstance(limit, int) or limit <= 0 or len(current) <= limit:
-        return current
-    if not env_bool("ENABLE_EXPERIENCE_LIMIT_PRUNE", True):
         return current
 
     removable = [

@@ -12,8 +12,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from prompts.recovery_templates import RECOVERY_SYNTHESIS_PROMPT
 
+from configs.runtime import runtime_setting
 from utils.json_utils import parse_llm_json
-from utils.env import env_flag, env_int
 from experience.schema import (
     ExperienceLibrary,
     format_experience_for_prompt,
@@ -332,10 +332,10 @@ def _recovery_limits(
     max_candidates: Optional[int],
     max_success_candidates: Optional[int],
 ) -> Tuple[int, int, int, int]:
-    max_candidates = max_candidates or env_int("FAILURE_RECOVERY_MAX_CANDIDATES", 2)
-    max_success_candidates = max_success_candidates or env_int("FAILURE_RECOVERY_SUCCESS_CANDIDATES", 4)
-    max_per_failure = env_int("FAILURE_RECOVERY_MAX_PER_FAILURE", 1)
-    max_llm_calls = env_int("FAILURE_RECOVERY_MAX_LLM_CALLS", max_candidates)
+    max_candidates = max_candidates or int(runtime_setting("failure_recovery.max_candidates", 1))
+    max_success_candidates = max_success_candidates or int(runtime_setting("failure_recovery.success_candidates", 3))
+    max_per_failure = 1
+    max_llm_calls = int(runtime_setting("failure_recovery.max_llm_calls", max_candidates))
     return max_candidates, max_success_candidates, max_per_failure, max_llm_calls
 
 
@@ -410,8 +410,6 @@ def synthesize_recovery_experiences(
 ) -> Tuple[ExperienceLibrary, List[str]]:
     """Ask an LLM to convert recoverable failures into candidate success records."""
     normalized = normalize_experience_library(experiences)
-    if not env_flag("ENABLE_FAILURE_TO_SUCCESS_RECOVERY", True):
-        return normalized, []
     if llm is None:
         return normalized, []
 

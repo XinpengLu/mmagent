@@ -5,6 +5,11 @@ import yaml
 from engine.api_processors import set_global_prompts as set_processors_prompts
 
 
+DEFAULT_TEMPERATURE = 0.6
+DEFAULT_TOP_P = 1.0
+DEFAULT_MAX_COMPLETION_TOKENS = 8192
+
+
 class ExperimentConfig:
     def __init__(self, args):
         self.args = args
@@ -25,7 +30,7 @@ class ExperimentConfig:
         self.args.model_name = os.environ.get("REASONING_MODEL_NAME")
 
     def _configure_experience_batching(self):
-        if not self.args.experience_online_generate:
+        if self.args.phase != "train":
             return
         
         small_batch = self.args.rollouts_per_sample
@@ -70,14 +75,7 @@ class ExperimentConfig:
 
     def _build_sampling_params(self):
         self.sampling_params = {
-            "temperature": self.args.temperature,
-            "top_p": self.args.top_p,
-            "max_tokens": self.args.max_completion_tokens,
+            "temperature": DEFAULT_TEMPERATURE,
+            "top_p": DEFAULT_TOP_P,
+            "max_tokens": DEFAULT_MAX_COMPLETION_TOKENS,
         }
-        if self.args.max_total_tokens <= self.args.max_completion_tokens:
-            adjusted_total = self.args.max_completion_tokens + 4096
-            print(
-                f"Warning: max_total_tokens ({self.args.max_total_tokens}) must be larger than "
-                f"max_completion_tokens ({self.args.max_completion_tokens}); using {adjusted_total}."
-            )
-            self.args.max_total_tokens = adjusted_total

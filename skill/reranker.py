@@ -7,7 +7,6 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from utils.env import env_int
 from experience.schema import (
     ExperienceLibrary,
     format_experience_for_prompt,
@@ -25,6 +24,9 @@ from .filters import (
 )
 from utils.json_utils import parse_llm_json_object
 from .utils import load_memory_prompt, truncate_text
+
+
+RECOVERY_MAX_UNVERIFIED_SELECTED_SKILLS = 1
 
 
 def _settings() -> SkillSettings:
@@ -136,7 +138,7 @@ def _limit_unverified_recovery_skills(
     skill_by_id: Dict[str, Dict[str, Any]],
 ) -> Tuple[List[str], List[Dict[str, str]]]:
     """Keep unverified recovery probes compact after LLM reranking."""
-    max_unverified = env_int("RECOVERY_MAX_UNVERIFIED_SELECTED_SKILLS", 1)
+    max_unverified = RECOVERY_MAX_UNVERIFIED_SELECTED_SKILLS
     if max_unverified < 0:
         return skill_ids, []
     kept: List[str] = []

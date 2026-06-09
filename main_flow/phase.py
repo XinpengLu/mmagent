@@ -50,23 +50,10 @@ class _MemoryPaths:
 
 @dataclass(frozen=True)
 class _ExecutionSettings:
-    temperature: float
-    top_p: float
-    max_completion_tokens: int
-    max_turns: int
-    max_images: int
-    max_total_tokens: int
-    max_pixels: int
-    min_pixels: int
     num_workers: int
     rollouts_per_sample: int
-    seed_base: int
     system_prompts_path: str
     tool_config_path: str
-    image_search_max_calls: int
-    web_search_max_calls: int
-    code_interpreter_max_calls: int
-    experience_max_ops: int
     experience_large_batch: int
     experience_max_items: int
     experience_generation_workers: int
@@ -84,23 +71,10 @@ class _ExecutionSettings:
         settings = ctx.settings
         num_workers = _setting_int(settings, "runtime.num_workers")
         return cls(
-            temperature=0.6,
-            top_p=1.0,
-            max_completion_tokens=8192,
-            max_turns=20,
-            max_images=50,
-            max_total_tokens=32768,
-            max_pixels=2_000_000,
-            min_pixels=40_000,
             num_workers=num_workers,
             rollouts_per_sample=_setting_int(settings, "rollout.per_sample"),
-            seed_base=42,
             system_prompts_path=str(ctx.system_prompts),
             tool_config_path=str(ctx.tool_config),
-            image_search_max_calls=5,
-            web_search_max_calls=7,
-            code_interpreter_max_calls=10,
-            experience_max_ops=3,
             experience_large_batch=_setting_int(settings, "experience.large_batch"),
             experience_max_items=_setting_int(settings, "experience.max_items"),
             experience_generation_workers=_setting_int(settings, "experience.generation_workers"),
@@ -217,53 +191,19 @@ def _build_execution_args(
     skill_library: Path,
     experience_library: Path,
 ) -> SimpleNamespace:
-    is_train = phase == "train"
     return SimpleNamespace(
         phase=phase,
         input_file=str(data_path),
         image_folder=str(image_dir),
         output_dir=str(output_dir),
-        skip_completed=True,
-        disable_memory_usage_update=phase in {"val", "test"},
         max_samples=max_samples,
         **asdict(settings),
         system_prompt_key=system_prompt,
         enabled_tools=enabled_tools,
-        experience_enable=True,
         experience_library=str(experience_library),
-        experience_online_generate=is_train,
-        experience_library_update=is_train,
-        experience_refine=is_train,
-        skill_enable=True,
         skill_library=str(skill_library),
-        skill_inference=True,
-        skill_retrieval_candidate_top_k=None,
-        experience_retrieval=True,
-        experience_retrieval_subtask_top_k=None,
-        experience_embedding_api_key=None,
-        experience_embedding_endpoint=None,
-        experience_embedding_cache_enable=True,
-        experience_retrieval_decomposition=True,
-        experience_retrieval_rewrite=True,
     )
 
-
-def run_main_flow_execution(args):
-    """Run one train/validation/test phase."""
-    from main_flow.config import ExperimentConfig
-    from main_flow.memory_update import TrainingMemoryUpdater
-    from main_flow.rollout_runner import MemoryRuntime, RolloutRunner
-    from main_flow.metrics import compute_dataset_summary, _save_results
-    from skill.utils import set_configured_callable_tools
-
-    set_configured_callable_tools(args.enabled_tools)
-
-    config = ExperimentConfig(args).load()
-    memory_runtime = MemoryRuntime(args, config.base_system_prompt).initialize()
-    training_updater = TrainingMemoryUpdater(args, memory_runtime)
-    all_results = RolloutRunner(config, memory_runtime, training_updater).run()
-    _save_results(all_results, args.output_dir)
-    compute_dataset_summary(config.data, args)
 
 def _build_phase_env(
     *,
@@ -280,6 +220,23 @@ def _build_phase_env(
         "MMAGENT_TRAIN_PHASE": str(phase == "train").lower(),
         "MMAGENT_VALIDATION_PHASE": str(phase == "val").lower(),
     }
+
+
+def run_main_flow_execution(args):
+    """Run one train/validation/test phase."""
+    from main_flow.config import ExperimentConfig
+    from main_flow.memory_update import TrainingMemoryUpdater
+    from main_flow.rollout_runner import MemoryRuntime, RolloutRunner
+    from main_flow.metrics import compute_dataset_summary, _save_results
+    from skill.utils import set_configured_callable_tools
+
+    set_configured_callable_tools(args.enabled_tools)
+    config = ExperimentConfig(args).load()
+    memory_runtime = MemoryRuntime(args, config.base_system_prompt).initialize()
+    training_updater = TrainingMemoryUpdater(args, memory_runtime)
+    all_results = RolloutRunner(config, memory_runtime, training_updater).run()
+    _save_results(all_results, args.output_dir)
+    compute_dataset_summary(config.data, args)
 
 
 def run_phase(

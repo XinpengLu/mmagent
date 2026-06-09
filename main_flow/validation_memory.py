@@ -12,7 +12,6 @@ from validation_tools.history import read_history
 from validation_tools.metrics import sample_metric
 from utils.artifacts import MEMORY_USAGE_FILENAME
 from utils.artifacts import read_json, write_json
-from utils.env import env_float, env_int
 
 
 _VALIDATION_STAT_KEYS = {
@@ -230,46 +229,38 @@ def _weak_validation(
     quality: float,
     pass_rate: float,
     *,
-    min_uses_env: str,
-    quality_env: str,
-    pass_env: str,
-    default_min_uses: int,
+    min_uses: int,
 ) -> bool:
     return (
-        used >= env_int(min_uses_env, default_min_uses)
-        and quality < env_float(quality_env, 0.12)
-        and pass_rate <= env_float(pass_env, 0.25)
+        used >= min_uses
+        and quality < 0.12
+        and pass_rate <= 0.25
     )
 
 
 def _recovery_validation_status(
     stats: Dict[str, Any],
     *,
-    weak_min_uses_env: str,
-    weak_quality_env: str,
-    weak_pass_env: str,
+    weak_min_uses: int,
     reject_if_already_disabled: bool = False,
 ) -> tuple[str, float, float] | None:
     used, quality, pass_rate = _validation_values(stats)
     if used <= 0:
         return None
-    if quality >= env_float("RECOVERY_PROMOTE_AVERAGE_THRESHOLD", 0.25) and pass_rate >= env_float("RECOVERY_PROMOTE_PASS_THRESHOLD", 0.50):
+    if quality >= 0.25 and pass_rate >= 0.50:
         return "validated", quality, pass_rate
     rejected = (
         reject_if_already_disabled
         or (
-            used >= env_int("RECOVERY_REJECT_MIN_VALIDATION_USES", 3)
-            and quality <= env_float("RECOVERY_REJECT_AVERAGE_THRESHOLD", 0.01)
-            and pass_rate <= env_float("RECOVERY_REJECT_PASS_THRESHOLD", 0.0)
+            used >= 3
+            and quality <= 0.01
+            and pass_rate <= 0.0
         )
         or _weak_validation(
             used,
             quality,
             pass_rate,
-            min_uses_env=weak_min_uses_env,
-            quality_env=weak_quality_env,
-            pass_env=weak_pass_env,
-            default_min_uses=2,
+            min_uses=weak_min_uses,
         )
     )
     return ("rejected" if rejected else "candidate_unverified"), quality, pass_rate
@@ -280,9 +271,7 @@ def _update_recovery_skill_status(item: Dict[str, Any]) -> None:
         return
     decision = _recovery_validation_status(
         item.get("stats") or {},
-        weak_min_uses_env="MIN_VALIDATION_USES_TO_DEMOTE_RECOVERY_SKILL",
-        weak_quality_env="LOW_QUALITY_SKILL_MIN_VALIDATION_AVG",
-        weak_pass_env="LOW_QUALITY_SKILL_MAX_PASS_RATE",
+        weak_min_uses=2,
         reject_if_already_disabled=bool(item.get("disabled")),
     )
     if decision is None:
@@ -315,9 +304,7 @@ def _update_recovery_experience_status(record: Dict[str, Any]) -> None:
         return
     decision = _recovery_validation_status(
         stats,
-        weak_min_uses_env="MIN_VALIDATION_USES_TO_DEMOTE_RECOVERY_EXPERIENCE",
-        weak_quality_env="LOW_QUALITY_EXPERIENCE_MIN_VALIDATION_AVG",
-        weak_pass_env="LOW_QUALITY_EXPERIENCE_MAX_PASS_RATE",
+        weak_min_uses=2,
     )
     if decision is None:
         return
@@ -344,10 +331,7 @@ def _update_skill_validation_status(
         used,
         quality,
         pass_rate,
-        min_uses_env="MIN_VALIDATION_USES_TO_DEMOTE_SKILL",
-        quality_env="LOW_QUALITY_SKILL_MIN_VALIDATION_AVG",
-        pass_env="LOW_QUALITY_SKILL_MAX_PASS_RATE",
-        default_min_uses=3,
+        min_uses=3,
     )
     if (
         used >= min_validation_uses_to_disable

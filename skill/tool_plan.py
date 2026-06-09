@@ -1,10 +1,9 @@
-"""Prompt formatting for executable tool plans from selected memory."""
+﻿"""Prompt formatting for executable tool plans from selected memory."""
 
 from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 
-from utils.env import env_float, env_int, safe_float, safe_int
 from prompts.skill_injection_templates import (
     DEFAULT_TOOL_PLAN_TEMPLATE,
     MANDATORY_TOOL_PLAN_TEMPLATE,
@@ -22,7 +21,22 @@ from .filters import (
     recovery_has_train_support,
     skill_low_validation_quality,
 )
-from .utils import as_callable_tool, configured_callable_tools
+from .utils import as_callable_tool, callable_tools
+
+
+GUARDRAIL_TOOL_PLAN_MIN_USES = 2
+GUARDRAIL_TOOL_PLAN_MIN_SUCCESS_RATE = 0.70
+MIN_VALIDATION_USES_TO_GATE_RECOVERY_TOOL_PLAN = 3
+ACTION_SKILL_MIN_VALIDATION_AVERAGE = 0.12
+ACTION_SKILL_MIN_SUCCESS_SUPPORT = 2
+ACTION_SKILL_HIGH_CONFIDENCE = 0.68
+DIRECT_EXPERIENCE_MIN_VALIDATION_AVG = 0.12
+DIRECT_EXPERIENCE_MIN_VALIDATION_PASS = 0.25
+DIRECT_EXPERIENCE_TOOL_PLAN_MIN_SUPPORT = 2
+DIRECT_EXPERIENCE_TOOL_PLAN_MIN_CONFIDENCE = 0.72
+ACTION_TOOL_PLAN_MAX_EXPERIENCES = 3
+BAD_EXPERIENCE_MAX_VALIDATION_AVG = 0.01
+BAD_EXPERIENCE_MAX_VALIDATION_PASS = 0.0
 
 
 def _record_has_callable_tool_policy(record: Dict[str, Any]) -> bool:
@@ -61,9 +75,9 @@ def _validation_feedback(
     stats = _stats(item)
     fallback_quality = item.get("validation_quality", quality_fallback) if use_item_quality else quality_fallback
     return (
-        safe_int(stats.get("validation_used_count"), 0),
-        safe_float(stats.get("validation_average_score", fallback_quality), quality_fallback),
-        safe_float(stats.get("validation_pass_rate"), 0.0),
+        int(stats.get("validation_used_count", 0)),
+        float(stats.get("validation_average_score", fallback_quality)),
+        float(stats.get("validation_pass_rate", 0.0)),
     )
 
 
@@ -74,8 +88,8 @@ def _failure_guardrail_tool_plan_allowed(skill: Dict[str, Any]) -> bool:
     used_count, usage_rate = _skill_usage_rate(metadata)
     if usage_rate is None:
         return False
-    min_uses = env_int("GUARDRAIL_TOOL_PLAN_MIN_USES", 2)
-    min_rate = env_float("GUARDRAIL_TOOL_PLAN_MIN_SUCCESS_RATE", 0.70)
+    min_uses = GUARDRAIL_TOOL_PLAN_MIN_USES
+    min_rate = GUARDRAIL_TOOL_PLAN_MIN_SUCCESS_RATE
     return used_count >= min_uses and usage_rate >= min_rate
 
 
@@ -94,10 +108,10 @@ def _action_skill_tool_plan_allowed(skill: Dict[str, Any]) -> bool:
     val_used, val_quality, _ = _validation_feedback(metadata)
     if val_used:
         if metadata.get("skill_type") == "recovery_action_skill":
-            min_val_uses = env_int("MIN_VALIDATION_USES_TO_GATE_RECOVERY_TOOL_PLAN", 3)
+            min_val_uses = MIN_VALIDATION_USES_TO_GATE_RECOVERY_TOOL_PLAN
             if val_used < min_val_uses:
                 return True
-        allowed = val_quality >= env_float("ACTION_SKILL_MIN_VALIDATION_AVERAGE", 0.12)
+        allowed = val_quality >= ACTION_SKILL_MIN_VALIDATION_AVERAGE
         if metadata.get("skill_type") == "recovery_action_skill":
             if allowed:
                 metadata["recovery_status"] = "validated"
@@ -105,12 +119,12 @@ def _action_skill_tool_plan_allowed(skill: Dict[str, Any]) -> bool:
         return allowed
 
     support = _support_counts(metadata)
-    success_support = safe_int(support.get("success"), 0)
-    failure_support = safe_int(support.get("failure"), 0)
-    recovery_support = safe_int(support.get("recovery"), 0)
-    success_prior_support = safe_int(support.get("success_prior"), 0)
-    supervised_support = safe_int(support.get("supervised_correction"), 0)
-    confidence = safe_float(metadata.get("confidence"), 0.0)
+    success_support = int(support.get("success", 0))
+    failure_support = int(support.get("failure", 0))
+    recovery_support = int(support.get("recovery", 0))
+    success_prior_support = int(support.get("success_prior", 0))
+    supervised_support = int(support.get("supervised_correction", 0))
+    confidence = float(metadata.get("confidence", 0.0))
 
     if metadata.get("skill_type") == "recovery_action_skill":
         return (
@@ -118,11 +132,11 @@ def _action_skill_tool_plan_allowed(skill: Dict[str, Any]) -> bool:
             and (success_prior_support > 0 or supervised_support > 0)
         )
 
-    min_success_support = env_int("ACTION_SKILL_MIN_SUCCESS_SUPPORT", 2)
+    min_success_support = ACTION_SKILL_MIN_SUCCESS_SUPPORT
     if success_support >= min_success_support and success_support >= failure_support:
         return True
 
-    high_conf = env_float("ACTION_SKILL_HIGH_CONFIDENCE", 0.68)
+    high_conf = ACTION_SKILL_HIGH_CONFIDENCE
     return (
         success_support > 0
         and success_support >= failure_support
@@ -159,17 +173,17 @@ def _direct_experience_tool_plan_allowed(record: Dict[str, Any]) -> bool:
         return True
 
     if val_used:
-        min_avg = env_float("DIRECT_EXPERIENCE_MIN_VALIDATION_AVG", 0.12)
-        min_pass = env_float("DIRECT_EXPERIENCE_MIN_VALIDATION_PASS", 0.25)
+        min_avg = DIRECT_EXPERIENCE_MIN_VALIDATION_AVG
+        min_pass = DIRECT_EXPERIENCE_MIN_VALIDATION_PASS
         return val_avg >= min_avg or val_pass >= min_pass
 
-    support_count = safe_int(stats.get("support_count"), 1)
-    min_support = env_int("DIRECT_EXPERIENCE_TOOL_PLAN_MIN_SUPPORT", 2)
+    support_count = int(stats.get("support_count", 1))
+    min_support = DIRECT_EXPERIENCE_TOOL_PLAN_MIN_SUPPORT
     if support_count >= min_support:
         return True
 
-    confidence = safe_float(record.get("confidence"), 0.0)
-    min_confidence = env_float("DIRECT_EXPERIENCE_TOOL_PLAN_MIN_CONFIDENCE", 0.72)
+    confidence = float(record.get("confidence", 0.0))
+    min_confidence = DIRECT_EXPERIENCE_TOOL_PLAN_MIN_CONFIDENCE
     return confidence >= min_confidence and not stats.get("recovered_from_failure")
 
 
@@ -182,8 +196,8 @@ def _record_quality_score(record: Dict[str, Any]) -> float:
         score += val_avg
         score += 0.5 * val_pass
         score += min(val_used, 8) * 0.03
-    score += min(safe_int(stats.get("support_count"), 1), 6) * 0.04
-    score += safe_float(record.get("confidence"), 0.0) * 0.2
+    score += min(int(stats.get("support_count", 1)), 6) * 0.04
+    score += float(record.get("confidence", 0.0)) * 0.2
     if stats.get("supervised_correction"):
         score += 0.15
     if stats.get("recovered_from_failure"):
@@ -192,7 +206,7 @@ def _record_quality_score(record: Dict[str, Any]) -> float:
 
 
 def _select_action_experience_ids(exp_ids: List[str], normalized: Dict[str, Dict[str, Any]]) -> set:
-    max_ids = env_int("ACTION_TOOL_PLAN_MAX_EXPERIENCES", 3)
+    max_ids = ACTION_TOOL_PLAN_MAX_EXPERIENCES
     if max_ids <= 0:
         return set(exp_ids)
     unique = [exp_id for exp_id in dict.fromkeys(exp_ids) if exp_id in normalized]
@@ -209,8 +223,8 @@ def _select_action_experience_ids(exp_ids: List[str], normalized: Dict[str, Dict
 def _validation_failed_bad_threshold(validation_used: int, validation_avg: float, validation_pass: float) -> bool:
     return (
         validation_used > 0
-        and validation_avg <= env_float("BAD_EXPERIENCE_MAX_VALIDATION_AVG", 0.01)
-        and validation_pass <= env_float("BAD_EXPERIENCE_MAX_VALIDATION_PASS", 0.0)
+        and validation_avg <= BAD_EXPERIENCE_MAX_VALIDATION_AVG
+        and validation_pass <= BAD_EXPERIENCE_MAX_VALIDATION_PASS
     )
 
 
@@ -284,7 +298,7 @@ def _low_information_success(record: Dict[str, Any]) -> bool:
     return (
         record.get("kind") == "success"
         and (
-            safe_float(record.get("confidence"), 0.0) < 0.45
+            float(record.get("confidence", 0.0)) < 0.45
             or _stats(record).get("low_information_success")
         )
     )
@@ -496,10 +510,7 @@ def format_executable_tool_plan_for_prompt(
 
 def format_default_tool_plan_for_prompt() -> Tuple[str, List[str]]:
     """Create a generic one-tool minimum plan when no memory policy is available."""
-    tools = configured_callable_tools()
-    if not tools:
-        return "", []
-
+    tools = callable_tools()
     tool_text = ", ".join(f"`{tool}`" for tool in tools)
     search_tools = [tool for tool in ("web_search", "image_search", "visit") if tool in tools]
     steps = []
@@ -530,3 +541,4 @@ def format_default_tool_plan_for_prompt() -> Tuple[str, List[str]]:
         steps="\n".join(steps),
     )
     return block.strip(), tools
+

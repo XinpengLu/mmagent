@@ -6,7 +6,6 @@ import re
 import time
 from qwen_vl_utils import fetch_image # type: ignore
 from utils.image_utils import estimate_tokens, pil_to_base64_data_uri, process_image
-from utils.env import env_bool, env_int
 from utils.judge import compute_score
 from engine.api_caller import call_vision_api
 from engine.api_model_caller import AgentState, create_model_caller, parse_function_call_response
@@ -26,6 +25,12 @@ from prompts.answer_templates import final_answer_synthesis_prompt
 SYSTEM_PROMPT = ""
 FINAL_ANSWER_MAX_TOKENS = 4096
 FINAL_ANSWER_RETRIES = 3
+TOOL_SYNTHESIS_AFTER_CALLS = 0
+MAX_TURNS = 20
+MAX_IMAGES = 50
+MAX_TOTAL_TOKENS = 32768
+MAX_PIXELS = 2_000_000
+MIN_PIXELS = 40_000
 
 
 def set_global_prompts(system_prompt):
@@ -60,13 +65,13 @@ def _initial_image_save_path(save_dir, index):
 def _image_content_item(image, args):
     return {
         "type": "image_url",
-        "image_url": {"url": pil_to_base64_data_uri(image, args.max_pixels, args.min_pixels)},
+        "image_url": {"url": pil_to_base64_data_uri(image, MAX_PIXELS, MIN_PIXELS)},
     }
 
 
 def _load_initial_image(image_path, image_name, save_dir, index, args):
-    original_image = fetch_image({'image': image_path, 'max_pixels': args.max_pixels})
-    processed_image = process_image(original_image, args.max_pixels, args.min_pixels)
+    original_image = fetch_image({'image': image_path, 'max_pixels': MAX_PIXELS})
+    processed_image = process_image(original_image, MAX_PIXELS, MIN_PIXELS)
     os.makedirs(save_dir, exist_ok=True)
     processed_image.save(_initial_image_save_path(save_dir, index))
     return image_name, processed_image, _image_content_item(processed_image, args)
@@ -301,9 +306,6 @@ def _save_final_synthesis_turn(save_dir, node, final_text, reason):
 
 def _synthesize_final_answer(current_node, args, sampling_params, save_dir, reason="max_turns"):
     """Ask for one best-effort final answer without tools."""
-    if not env_bool("ENABLE_FINAL_ANSWER_ON_MAX_TURNS", True):
-        return False
-
     final_prompt = final_answer_synthesis_prompt(reason)
     messages = list(current_node.api_conversation_history)
     messages.append({"role": "user", "content": final_prompt})
@@ -358,10 +360,10 @@ def _synthesize_final_answer(current_node, args, sampling_params, save_dir, reas
 
 
 def _stop_for_runtime_limits(node, args, sampling_params):
-    if len(node.image_map) >= args.max_images:
+    if len(node.image_map) >= MAX_IMAGES:
         node.mark_final("Error: Reached max image limit.")
         return True
-    if node.current_token_count >= args.max_total_tokens - sampling_params['max_tokens']:
+    if node.current_token_count >= MAX_TOTAL_TOKENS - sampling_params['max_tokens']:
         node.mark_final("Error: Reached max token limit.")
         return True
     return False
@@ -415,7 +417,7 @@ def _handle_model_error_response(current_node, response_text, save_dir, turn):
 
 
 def _maybe_synthesize_after_tool_budget(current_node, args, sampling_params, save_dir):
-    tool_synthesis_after = env_int("TOOL_SYNTHESIS_AFTER_CALLS", 0)
+    tool_synthesis_after = TOOL_SYNTHESIS_AFTER_CALLS
     if tool_synthesis_after <= 0:
         return False
     if _count_executed_tool_calls(current_node) < tool_synthesis_after:
@@ -446,7 +448,7 @@ def _run_greedy_loop(current_node, model_caller, args, sampling_params, question
     mandatory_tool_required = bool(getattr(args, "_mandatory_tool_plan_required", False))
     mandatory_tool_names = _mandatory_tool_names(args)
 
-    for turn in range(args.max_turns):
+    for turn in range(MAX_TURNS):
         if _stop_for_runtime_limits(current_node, args, sampling_params):
             break
 
@@ -471,7 +473,7 @@ def _run_greedy_loop(current_node, model_caller, args, sampling_params, question
             current_node.mark_final(final_answer)
             break
 
-        if env_bool("ENABLE_FINAL_ANSWER_ON_PARSE_FAILURE", True) and _synthesize_final_answer(
+        if _synthesize_final_answer(
             current_node, args, sampling_params, save_dir, "parse_failure"
         ):
             break
@@ -614,8 +616,7 @@ def process_single_sample(sample, args, sampling_params, rollout_idx=None):
     """Process one sample and save its rollout artifacts."""
     question_id = sample.get("doc_id", sample.get("question_id", "N/A"))
 
-    rollouts_per_sample = getattr(args, "rollouts_per_sample", 1)
-    if rollout_idx is not None and rollouts_per_sample > 1:
+    if rollout_idx is not None and args.rollouts_per_sample > 1:
         sample_dir = os.path.join(args.output_dir, question_id)
         save_dir = os.path.join(sample_dir, f"rollout_{rollout_idx}")
     else:

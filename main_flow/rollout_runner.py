@@ -4,15 +4,15 @@ import json
 import logging
 import os
 import time
+from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 from tqdm import tqdm
 
 from engine.api_processors import process_single_sample, set_global_prompts as set_processors_prompts
 from skill import update_memory_usage_after_sample
-from utils.env import env_flag, env_int
 from utils.transient import (
     result_has_transient_failure,
     text_has_transient_failure,
@@ -28,20 +28,22 @@ from main_flow.memory import (
 from main_flow.metrics import compute_and_save_sample_summary
 from utils.artifacts import (
     ROLLOUT_METRICS_FILENAME,
-    SAMPLE_SUMMARY_FILENAME,
     TRAJECTORY_FILENAME,
     clean_rollout_artifacts,
 )
 
 
 logger = logging.getLogger(__name__)
+SEED_BASE = 42
+VALIDATED_MEMORY_POLICY_TEMPERATURE = 0.2
+VALIDATED_MEMORY_POLICY_TOP_P = 1.0
 
 
 @dataclass
 class _PipelineState:
-    active_futures: Dict[Any, Dict[str, Any]] = field(default_factory=dict)
-    rollout_counts: Dict[int, int] = field(default_factory=dict)
-    completed_samples: set = field(default_factory=set)
+    active_futures: dict[Any, dict[str, Any]] = field(default_factory=dict)
+    rollout_counts: dict[int, int] = field(default_factory=dict)
+    completed_samples: set[int] = field(default_factory=set)
     next_sample_idx: int = 0
     active_retrieval_count: int = 0
 
@@ -54,28 +56,22 @@ def _float_or_default(value, default):
 
 
 def _apply_validated_memory_sampling_policy(args, sampling_params):
-    if not env_flag("ENABLE_VALIDATED_MEMORY_POLICY_LOW_TEMPERATURE", True):
-        return
     if getattr(args, "_memory_policy_status", "") != "validated_policy":
         return
 
-    policy_temperature = (
-        getattr(args, "_memory_policy_temperature", None)
-        if getattr(args, "_memory_policy_temperature", None) is not None
-        else os.environ.get("VALIDATED_MEMORY_POLICY_TEMPERATURE", "0.2")
-    )
+    policy_temperature = getattr(args, "_memory_policy_temperature", None)
+    if policy_temperature is None:
+        policy_temperature = VALIDATED_MEMORY_POLICY_TEMPERATURE
+
     policy_temperature = _float_or_default(policy_temperature, 0.2)
     sampling_params["temperature"] = min(
         _float_or_default(sampling_params.get("temperature"), policy_temperature),
         policy_temperature,
     )
-    if os.environ.get("VALIDATED_MEMORY_POLICY_TOP_P"):
-        top_p = _float_or_default(os.environ.get("VALIDATED_MEMORY_POLICY_TOP_P"), None)
-        if top_p is not None:
-            sampling_params["top_p"] = min(
-                _float_or_default(sampling_params.get("top_p"), 1.0),
-                top_p,
-            )
+    sampling_params["top_p"] = min(
+        _float_or_default(sampling_params.get("top_p"), 1.0),
+        VALIDATED_MEMORY_POLICY_TOP_P,
+    )
 
 
 def _run_single_rollout(sample, args, sampling_params, rollout_idx):
@@ -83,24 +79,21 @@ def _run_single_rollout(sample, args, sampling_params, rollout_idx):
     import random
 
     rollout_args = prepare_sample_args(args)
-    seed = args.seed_base + rollout_idx
+    seed = SEED_BASE + rollout_idx
     random.seed(seed)
 
-    rollout_sampling_params = sampling_params.copy()
-    if 'seed' in rollout_sampling_params:
-        rollout_sampling_params['seed'] = seed
+    params = sampling_params.copy()
+    if "seed" in params:
+        params["seed"] = seed
 
-    _apply_validated_memory_sampling_policy(rollout_args, rollout_sampling_params)
+    _apply_validated_memory_sampling_policy(rollout_args, params)
 
-    result = process_single_sample(sample, rollout_args, rollout_sampling_params, rollout_idx=rollout_idx)
-    return result
+    return process_single_sample(sample, rollout_args, params, rollout_idx=rollout_idx)
 
 
 def _rollout_output_dir(output_dir, question_id, rollout_idx, rollouts_per_sample):
     sample_dir = os.path.join(output_dir, str(question_id))
-    if int(rollouts_per_sample or 1) > 1:
-        return os.path.join(sample_dir, f"rollout_{rollout_idx}")
-    return sample_dir
+    return os.path.join(sample_dir, f"rollout_{rollout_idx}") if rollouts_per_sample > 1 else sample_dir
 
 
 def _sample_rollout_info(sample, sample_idx, question_id, sample_dir, sample_rollout_results):
@@ -118,6 +111,26 @@ def _record_sample_info(all_results, sample_info):
         return False
     all_results.extend(sample_info['sample_rollout_results'])
     return True
+
+
+def _finalize_sample(sample, sample_dir, question_id, results, args, *, update_memory_usage=True):
+    if not results:
+        return
+
+    compute_and_save_sample_summary(
+        question_id,
+        results,
+        args.rollouts_per_sample,
+        sample_dir,
+    )
+    if update_memory_usage and args.phase == "train":
+        update_memory_usage_after_sample(
+            args.experience_library,
+            args.skill_library,
+            sample_dir,
+            sample,
+            results,
+        )
 
 
 def _run_rollout_until_valid(sample, args, sampling_params, rollout_idx, run_single_rollout_func=_run_single_rollout):
@@ -161,41 +174,48 @@ def _run_rollout_until_valid(sample, args, sampling_params, rollout_idx, run_sin
     )
 
 
+def _count_trajectory_turns(path):
+    max_turn_idx = -1
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    logger.debug("Error parsing trajectory line: %s", exc)
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                turn_idx = item.get("turn_idx")
+                if turn_idx is not None:
+                    try:
+                        max_turn_idx = max(max_turn_idx, int(turn_idx))
+                    except (TypeError, ValueError):
+                        logger.debug("Invalid trajectory turn_idx: %s", turn_idx)
+                        return None
+    except OSError as exc:
+        logger.debug("Error reading trajectory file: %s", exc)
+        return None
+    return max_turn_idx + 1 if max_turn_idx >= 0 else None
+
+
 def _load_completed_rollout_result(sample_dir, rollout_dir, rollout_idx=None):
     traj_file = os.path.join(rollout_dir, TRAJECTORY_FILENAME)
     metrics_file = os.path.join(rollout_dir, ROLLOUT_METRICS_FILENAME)
     if not (os.path.exists(traj_file) and os.path.exists(metrics_file)):
         return None
 
-    max_turn_idx = -1
-    has_turn = False
-    try:
-        with open(traj_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                try:
-                    traj_data = json.loads(line)
-                except json.JSONDecodeError as e:
-                    logger.debug(f"Error parsing trajectory line: {e}")
-                    continue
-                turn_idx = traj_data.get('turn_idx')
-                if turn_idx is not None:
-                    has_turn = True
-                    if turn_idx > max_turn_idx:
-                        max_turn_idx = turn_idx
-    except Exception as e:
-        logger.debug(f"Error reading trajectory file: {e}")
-        return None
-
-    if not has_turn:
+    num_turns = _count_trajectory_turns(traj_file)
+    if num_turns is None:
         return None
 
     try:
-        with open(metrics_file, 'r', encoding='utf-8') as f:
+        with open(metrics_file, "r", encoding="utf-8") as f:
             metrics = json.load(f)
-    except Exception as e:
-        logger.debug(f"Error loading existing metrics: {e}")
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.debug("Error loading existing metrics: %s", exc)
         return None
 
     if rollout_dir_has_transient_failure(rollout_dir, metrics):
@@ -203,11 +223,10 @@ def _load_completed_rollout_result(sample_dir, rollout_dir, rollout_idx=None):
         clean_rollout_artifacts(rollout_dir)
         return None
 
-    num_turns = max_turn_idx + 1 if max_turn_idx >= 0 else 0
     result = {
         'question_id': os.path.basename(sample_dir),
         'accuracy_score': metrics.get('accuracy_score', 0.0),
-        'conversation_history': [{"role": "assistant", "content": ""} for _ in range(num_turns)] if num_turns > 0 else [],
+        'conversation_history': [{"role": "assistant", "content": ""} for _ in range(num_turns)],
     }
     if rollout_idx is not None:
         result['_rollout_idx'] = rollout_idx
@@ -216,7 +235,7 @@ def _load_completed_rollout_result(sample_dir, rollout_dir, rollout_idx=None):
 
 def _load_reusable_rollout_results(sample_dir, args):
     """Return clean completed rollout results plus rollout indices that need rerun."""
-    rollouts_per_sample = int(getattr(args, 'rollouts_per_sample', 1) or 1)
+    rollouts_per_sample = args.rollouts_per_sample
     if rollouts_per_sample <= 1:
         result = _load_completed_rollout_result(sample_dir, sample_dir, 0)
         return ([result] if result else []), ([] if result else [0])
@@ -233,65 +252,28 @@ def _load_reusable_rollout_results(sample_dir, args):
     return reusable_results, missing_indices
 
 
-def _sample_summary_is_reusable(sample_dir):
-    summary_path = os.path.join(sample_dir, SAMPLE_SUMMARY_FILENAME)
-    if not os.path.exists(summary_path):
-        return False
-    try:
-        with open(summary_path, "r", encoding="utf-8") as f:
-            summary = json.load(f)
-    except Exception as exc:
-        logger.info(f"Existing sample summary is unreadable and will be regenerated: {summary_path} ({exc})")
-        return False
-    if isinstance(summary, dict) and summary.get("has_transient_failure"):
-        logger.info(f"Existing sample summary has transient failure and will be regenerated: {summary_path}")
-        os.remove(summary_path)
-        return False
-    return True
-
-
-def _check_sample_completed(sample_dir, args):
-    """Check whether a sample is complete and recover minimal result records."""
-    if not getattr(args, 'skip_completed', False):
-        return None
-
-    if not _sample_summary_is_reusable(sample_dir):
-        return None
-
-    sample_rollout_results, missing_indices = _load_reusable_rollout_results(sample_dir, args)
-    if missing_indices:
-        return None
-    return {'sample_rollout_results': sample_rollout_results}
+def _load_sample_rollouts(sample_dir, args):
+    """Return reusable rollout results and rollout indices that still need execution."""
+    return _load_reusable_rollout_results(sample_dir, args)
 
 
 def _pipeline_rollout_state(question_id, sample_dir, args):
-    completed_rollouts = []
-    pending_rollout_indices = list(range(args.rollouts_per_sample))
-    skip_sample = False
-
-    if not getattr(args, 'skip_completed', False):
-        return completed_rollouts, pending_rollout_indices, skip_sample
-
-    skip_sample = True
     try:
-        completed_rollouts, pending_rollout_indices = _load_reusable_rollout_results(sample_dir, args)
-        if pending_rollout_indices:
-            skip_sample = False
+        completed_rollouts, pending_rollout_indices = _load_sample_rollouts(sample_dir, args)
+        skip_sample = not pending_rollout_indices
+        if skip_sample:
+            print(f"  [Pipeline] Sample {question_id}: already completed, skipping...")
+        elif completed_rollouts:
             print(
                 f"  [Pipeline] Sample {question_id}: reusing "
                 f"{len(completed_rollouts)} valid rollout(s), "
                 f"rerunning rollout(s) {pending_rollout_indices}..."
             )
-        else:
-            compute_and_save_sample_summary(
-                question_id, completed_rollouts, args.rollouts_per_sample, sample_dir
-            )
     except Exception:
+        completed_rollouts = []
+        pending_rollout_indices = list(range(args.rollouts_per_sample))
         skip_sample = False
         print(f"  [Pipeline] Sample {question_id}: existing rollout files are unreadable, rerunning...")
-
-    if skip_sample:
-        print(f"  [Pipeline] Sample {question_id}: already has {SAMPLE_SUMMARY_FILENAME}, skipping...")
 
     return completed_rollouts, pending_rollout_indices, skip_sample
 
@@ -305,13 +287,13 @@ def _pending_pipeline_samples(samples, sample_indices, sample_results_dict, args
         completed_rollouts, pending_rollout_indices, skip_sample = _pipeline_rollout_state(
             question_id, sample_dir, args
         )
-        if skip_sample:
-            continue
-
         if completed_rollouts:
             sample_results_dict[actual_sample_idx]['results'].extend(completed_rollouts)
             if all_results_list is not None:
                 all_results_list.extend(completed_rollouts)
+        if skip_sample:
+            _finalize_sample(sample, sample_dir, question_id, completed_rollouts, args, update_memory_usage=False)
+            continue
         pending_samples.append({
             'sample_idx': actual_sample_idx,
             'sample': sample,
@@ -323,29 +305,19 @@ def _pending_pipeline_samples(samples, sample_indices, sample_results_dict, args
     return pending_samples
 
 
-def _finalize_pipeline_sample_if_complete(sample_idx, rollout_counts, completed_samples, sample_results_dict, args):
-    if sample_idx in completed_samples or rollout_counts[sample_idx] < args.rollouts_per_sample:
+def _finalize_pipeline_sample_if_complete(sample_idx, state: _PipelineState, sample_results_dict, args):
+    if sample_idx in state.completed_samples or state.rollout_counts[sample_idx] < args.rollouts_per_sample:
         return
 
-    completed_samples.add(sample_idx)
+    state.completed_samples.add(sample_idx)
     sample_info = sample_results_dict[sample_idx]
-    if not sample_info['results']:
-        return
-
-    compute_and_save_sample_summary(
+    _finalize_sample(
+        sample_info['sample'],
+        sample_info['sample_dir'],
         sample_info['question_id'],
         sample_info['results'],
-        args.rollouts_per_sample,
-        sample_info['sample_dir'],
+        args,
     )
-    if not getattr(args, 'disable_memory_usage_update', False):
-        update_memory_usage_after_sample(
-            getattr(args, 'experience_library', None),
-            getattr(args, 'skill_library', None),
-            sample_info['sample_dir'],
-            sample_info['sample'],
-            sample_info['results'],
-        )
 
 
 def _schedule_item_rollouts(
@@ -418,7 +390,7 @@ def _schedule_initial_pipeline_work(
     sampling_params,
     run_single_rollout_func,
 ):
-    skill_enabled = getattr(args, 'skill_inference', False) and getattr(args, 'skill_library', None)
+    skill_enabled = bool(args.skill_library)
     if experience_retriever is None and not skill_enabled:
         for item in pending_samples:
             _schedule_item_rollouts(
@@ -502,8 +474,7 @@ def _handle_rollout_future(
     state.rollout_counts[actual_sample_idx] += 1
     _finalize_pipeline_sample_if_complete(
         actual_sample_idx,
-        state.rollout_counts,
-        state.completed_samples,
+        state,
         sample_results_dict,
         args,
     )
@@ -575,16 +546,16 @@ def _run_pipeline_event_loop(
 
 
 def _execute_pipeline_parallel_processing(
-    samples: List[Dict],
-    sample_indices: List[int],
-    sample_results_dict: Dict,
+    samples: list[dict],
+    sample_indices: list[int],
+    sample_results_dict: dict,
     args: Any,
-    experience_retriever: Optional[Any],
+    experience_retriever: Any | None,
     base_system_prompt: str,
-    sampling_params: Dict,
+    sampling_params: dict,
     run_single_rollout_func: Callable,
-    progress_desc: Optional[str] = None,
-    all_results_list: Optional[List] = None
+    progress_desc: str | None = None,
+    all_results_list: list | None = None,
 ) -> None:
     """Pipeline-parallel retrieval and rollout scheduling for multi-rollout mode."""
     with ThreadPoolExecutor(max_workers=args.num_workers) as executor:
@@ -674,6 +645,29 @@ class RolloutRunner:
         question_id, sample_dir = get_sample_metadata(sample, sample_idx, sample_args.output_dir)
         os.makedirs(sample_dir, exist_ok=True)
 
+        sample_rollout_results, pending_rollout_indices = _load_sample_rollouts(sample_dir, sample_args)
+        if not pending_rollout_indices:
+            print(f"[Sample {sample_idx + 1}/{len(self.data)}] {question_id} - Already completed, skipping...")
+            _finalize_sample(
+                sample,
+                sample_dir,
+                question_id,
+                sample_rollout_results,
+                sample_args,
+                update_memory_usage=False,
+            )
+            return _sample_rollout_info(sample, sample_idx, question_id, sample_dir, sample_rollout_results)
+
+        if sample_rollout_results:
+            print(
+                f"[Sample {sample_idx + 1}/{len(self.data)}] {question_id} - "
+                f"Reusing {len(sample_rollout_results)} valid rollout(s), "
+                f"running {len(pending_rollout_indices)} rollout(s)..."
+            )
+
+        if sample_args.rollouts_per_sample > 1:
+            print(f"\n[Sample {sample_idx + 1}/{len(self.data)}] {question_id} - Running {len(pending_rollout_indices)} rollout(s)...")
+
         retrieve_experiences_for_sample(
             sample,
             sample_args,
@@ -684,26 +678,7 @@ class RolloutRunner:
             update_global_prompts=False,
         )
 
-        completed_info = _check_sample_completed(sample_dir, sample_args)
-        if completed_info:
-            print(f"[Sample {sample_idx + 1}/{len(self.data)}] {question_id} - Already completed, skipping...")
-            return _sample_rollout_info(
-                sample, sample_idx, question_id, sample_dir, completed_info.get('sample_rollout_results', [])
-            )
-
-        sample_rollout_results = []
-        pending_rollout_indices = list(range(sample_args.rollouts_per_sample))
-        if getattr(sample_args, 'skip_completed', False):
-            sample_rollout_results, pending_rollout_indices = _load_reusable_rollout_results(sample_dir, sample_args)
-            if sample_rollout_results:
-                print(
-                    f"[Sample {sample_idx + 1}/{len(self.data)}] {question_id} - "
-                    f"Reusing {len(sample_rollout_results)} valid rollout(s), "
-                    f"running {len(pending_rollout_indices)} rollout(s)..."
-                )
-
         if sample_args.rollouts_per_sample > 1:
-            print(f"\n[Sample {sample_idx + 1}/{len(self.data)}] {question_id} - Running {len(pending_rollout_indices)} rollout(s)...")
             max_workers = min(sample_args.num_workers, sample_args.rollouts_per_sample)
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_rollout_idx = {
@@ -729,25 +704,9 @@ class RolloutRunner:
                     result['_rollout_idx'] = 0
                     sample_rollout_results.append(result)
 
-        self._finalize_sample_rollouts(sample, sample_args, question_id, sample_dir, sample_rollout_results)
+        _finalize_sample(sample, sample_dir, question_id, sample_rollout_results, sample_args)
 
         return _sample_rollout_info(sample, sample_idx, question_id, sample_dir, sample_rollout_results)
-
-    def _finalize_sample_rollouts(self, sample, sample_args, question_id, sample_dir, sample_rollout_results):
-        compute_and_save_sample_summary(
-            question_id,
-            sample_rollout_results,
-            sample_args.rollouts_per_sample,
-            sample_dir,
-        )
-        if sample_rollout_results:
-            update_memory_usage_after_sample(
-                getattr(sample_args, 'experience_library', None),
-                getattr(sample_args, 'skill_library', None),
-                sample_dir,
-                sample,
-                sample_rollout_results,
-            )
 
     def _pipeline_batch(self, batch_samples, batch_indices, progress_desc):
         batch_sample_results = {}
@@ -794,7 +753,6 @@ class RolloutRunner:
     def _run_parallel_multi_rollout(self):
         print(f"\n[Parallel Mode] Processing {len(self.data)} samples with {self.args.num_workers} workers...")
         print(f"  Rollouts per sample: {self.args.rollouts_per_sample}")
-
         if self.training_updater.enabled:
             max_concurrent_samples = max(1, self.args.num_workers // self.args.rollouts_per_sample)
             print(f"  Max concurrent samples per batch: {max_concurrent_samples} (limited by {self.args.num_workers} workers)")
@@ -814,7 +772,6 @@ class RolloutRunner:
 
     def _run_parallel_single_rollout(self):
         print(f"\n[Parallel Mode] Processing {len(self.data)} samples with {self.args.num_workers} workers...")
-
         if self.training_updater.enabled:
             batch_size = min(self.args.experience_samples_per_large_batch, self.args.num_workers)
             sample_idx = 0

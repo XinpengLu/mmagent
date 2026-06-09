@@ -23,7 +23,6 @@ from validation_tools.tasks import task_of_sample
 from utils.artifacts import MEMORY_USAGE_FILENAME, ROLLOUT_METRICS_FILENAME, TRAJECTORY_FILENAME
 from utils.artifacts import read_json, write_json
 from configs.runtime import runtime_setting
-from utils.env import env_float, env_int
 
 
 def _sample_id(sample: Dict[str, Any]) -> str:
@@ -172,7 +171,6 @@ def _candidate_samples(
     min_average: float,
 ) -> List[Tuple[float, Path, Dict[str, Any]]]:
     rows: List[Tuple[float, Path, Dict[str, Any]]] = []
-    min_average = env_float("VALIDATION_REFLECTION_MIN_AVERAGE", min_average)
     for sample_dir in metrics_dir.iterdir() if metrics_dir.exists() else []:
         if not sample_dir.is_dir():
             continue
@@ -301,7 +299,7 @@ def _write_reflection_memory(
     skill_args = SimpleNamespace(
         skill_cluster_min_experiences=int(runtime_setting("skill.cluster.min_experiences", 2)),
         skill_cluster_max_clusters=int(runtime_setting("skill.cluster.max_clusters", 12)),
-        skill_max_length=env_int("SKILL_MAX_LENGTH", 1000),
+        skill_max_length=1000,
     )
     merged = cluster_experiences_to_skills(merged, str(skill_library), ExperienceLLM(), skill_args)
     save_library(str(exp_path), merged)

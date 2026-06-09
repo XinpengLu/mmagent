@@ -32,11 +32,10 @@ from skill import (
     retrieve_skills_for_task,
     skill_index_path,
 )
-from skill.utils import enabled_callable_tools
+from skill.utils import callable_tools
 from engine.api_processors import set_global_prompts as set_processors_prompts
 from prompts.skill_injection_templates import SKILL_INJECTION_HEADER
 from utils.image_utils import process_image
-from utils.env import env_bool, env_float, env_int, safe_float, safe_int
 from utils.artifacts import (
     MEMORY_USAGE_FILENAME,
     RETRIEVAL_INFO_FILENAME,
@@ -44,34 +43,27 @@ from utils.artifacts import (
 )
 
 logger = logging.getLogger(__name__)
+MAX_PIXELS = 2_000_000
+MIN_PIXELS = 40_000
+MEMORY_RETRIEVAL_CANDIDATE_MULTIPLIER = 2
+MEMORY_RETRIEVAL_MAX_CANDIDATES_PER_QUERY = 8
+DIRECT_EXPERIENCE_TOOL_PLAN_MAX_EXPERIENCES = 2
+DIRECT_EXPERIENCE_TOOL_PLAN_MAX_STEPS = 3
+VALIDATED_MEMORY_POLICY_TEMPERATURE = 0.2
 
 
-def _candidate_pool_top_k(base_top_k: int, explicit_value: Optional[int], env_name: str) -> int:
+def _candidate_pool_top_k(base_top_k: int) -> int:
     """Return a candidate recall size without changing final injection limits."""
     base = max(1, int(base_top_k or 1))
-    if explicit_value is not None:
-        return max(base, int(explicit_value or base))
-
-    env_value = os.environ.get(env_name)
-    if env_value:
-        try:
-            return max(base, int(env_value))
-        except ValueError:
-            pass
-
-    if not env_bool("MEMORY_RETRIEVAL_OVERSAMPLE_FOR_FILTERS", True):
-        return base
-    multiplier = env_int("MEMORY_RETRIEVAL_CANDIDATE_MULTIPLIER", 2)
-    max_pool = env_int("MEMORY_RETRIEVAL_MAX_CANDIDATES_PER_QUERY", 8)
+    multiplier = MEMORY_RETRIEVAL_CANDIDATE_MULTIPLIER
+    max_pool = MEMORY_RETRIEVAL_MAX_CANDIDATES_PER_QUERY
     return min(max_pool, max(base, base * max(1, multiplier)))
 
 
 def _experience_library_for_skill_retrieval(args, experience_retriever) -> Dict[str, Any]:
     if experience_retriever is not None:
         return experience_retriever.experiences
-    if getattr(args, 'experience_library', None):
-        return load_experiences(args.experience_library)
-    return {}
+    return load_experiences(args.experience_library)
 
 
 def _available_experience_ids(experiences: Dict[str, Any]) -> Optional[set]:
@@ -91,8 +83,7 @@ def _available_experience_ids(experiences: Dict[str, Any]) -> Optional[set]:
 
 def _embedding_endpoint(args) -> str:
     endpoint = (
-        getattr(args, 'experience_embedding_endpoint', None)
-        or os.environ.get("EXPERIENCE_EMBEDDING_ENDPOINT")
+        os.environ.get("EXPERIENCE_EMBEDDING_ENDPOINT")
         or os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1")
     )
     if endpoint and not endpoint.endswith("/v1"):
@@ -102,39 +93,22 @@ def _embedding_endpoint(args) -> str:
 
 def _embedding_config(args) -> Dict[str, Any]:
     return {
-        "enable_cache": getattr(args, 'experience_embedding_cache_enable', True),
-        "cache_dir": os.path.dirname(args.experience_library) if args.experience_library else None,
+        "enable_cache": True,
+        "cache_dir": os.path.dirname(args.experience_library),
         "embedding_model": os.environ.get("EXPERIENCE_EMBEDDING_MODEL", "text-embedding-3-small"),
         "embedding_api_key": (
-            getattr(args, 'experience_embedding_api_key', None)
-            or os.environ.get("EXPERIENCE_EMBEDDING_API_KEY")
+            os.environ.get("EXPERIENCE_EMBEDDING_API_KEY")
             or os.environ.get("OPENAI_API_KEY")
         ),
         "embedding_endpoint": _embedding_endpoint(args),
     }
 
 
-def _llm_client_for_retrieval_features(args) -> Optional[ExperienceLLM]:
-    features = []
-    if getattr(args, 'experience_retrieval_decomposition', False):
-        features.append("task decomposition")
-    if getattr(args, 'experience_retrieval_rewrite', False):
-        features.append("experience rewrite")
-    if not features:
-        return None
-
-    print(f"Initializing LLM client for {', '.join(features)}...")
+def _llm_client_for_retrieval_features() -> ExperienceLLM:
+    print("Initializing LLM client for task decomposition, experience rewrite...")
     llm_client = ExperienceLLM()
     print("LLM client initialized.")
     return llm_client
-
-
-def _print_retriever_header(experience_library: str, experience_count: int) -> None:
-    print(f"\n{'='*80}")
-    print("Initializing Experience Retriever (retrieval mode enabled)...")
-    print(f"{'='*80}\n")
-    print(f"Loading experience library: {experience_library}")
-    print(f"Total experiences in library: {experience_count}")
 
 
 def _build_experience_retriever(args, experiences: Dict[str, Any]) -> ExperienceRetriever:
@@ -147,7 +121,7 @@ def _build_experience_retriever(args, experiences: Dict[str, Any]) -> Experience
         embedding_endpoint=embedding["embedding_endpoint"],
         cache_dir=embedding["cache_dir"],
         enable_cache=embedding["enable_cache"],
-        llm_client=_llm_client_for_retrieval_features(args),
+        llm_client=_llm_client_for_retrieval_features(),
         experience_library_path=args.experience_library,
     )
 
@@ -161,44 +135,32 @@ def _print_retriever_stats(args, retriever: ExperienceRetriever) -> None:
     print(f"  - Cache enabled: {stats['cache_enabled']}")
     if stats['cache_path']:
         print(f"  - Cache path: {stats['cache_path']}")
-    if getattr(args, 'experience_retrieval_decomposition', False):
-        print("  - Task decomposition: ENABLED")
-    if getattr(args, 'experience_retrieval_rewrite', False):
-        print("  - Experience rewrite: ENABLED")
+    print("  - Task decomposition: ENABLED")
+    print("  - Experience rewrite: ENABLED")
     print(f"\n{'='*80}\n")
 
 
-def _full_injection_prompt(args, experiences: Dict[str, Any]) -> Optional[str]:
-    injection_text = format_for_prompt(experiences, max_items=getattr(args, 'experience_max_items', 256))
-    if injection_text:
-        print(f"Loaded {len(experiences)} experiences for injection (full injection mode).")
-        return injection_text
-    return None
-
-
 def initialize_experience_retriever(args):
-    """Initialize retrieval mode or return a full memory injection prompt."""
-    if not (getattr(args, 'experience_enable', False) and args.experience_library):
-        return None, None
-
+    """Initialize the experience retriever used by sample-level memory retrieval."""
     try:
         exps = load_experiences(args.experience_library)
     except Exception as e:
         print(f"Experience injection skipped: {e}")
         return None, None
 
-    use_retrieval = getattr(args, 'experience_retrieval', False)
-    if use_retrieval:
-        _print_retriever_header(args.experience_library, len(exps))
-        try:
-            experience_retriever = _build_experience_retriever(args, exps)
-            _print_retriever_stats(args, experience_retriever)
-            return experience_retriever, None
-        except Exception as e:
-            print(f"Warning: Failed to initialize Experience Retriever: {e}")
-            print("  Falling back to full experience injection mode.")
+    print(f"\n{'='*80}")
+    print("Initializing Experience Retriever (retrieval mode enabled)...")
+    print(f"{'='*80}\n")
+    print(f"Loading experience library: {args.experience_library}")
+    print(f"Total experiences in library: {len(exps)}")
 
-    return None, _full_injection_prompt(args, exps)
+    try:
+        experience_retriever = _build_experience_retriever(args, exps)
+        _print_retriever_stats(args, experience_retriever)
+        return experience_retriever, None
+    except Exception as e:
+        print(f"Warning: Failed to initialize Experience Retriever: {e}")
+        return None, None
 
 
 @dataclass
@@ -239,11 +201,7 @@ class _MemoryPipelineState:
 def _build_query(sample, args) -> _MemoryQuery:
     """Build the text, metadata, and images used by memory retrieval."""
     base_query_text = sample.get('problem', sample.get('question', ''))
-    metadata_context = (
-        sample_metadata_context(sample)
-        if env_bool("ENABLE_METADATA_RETRIEVAL_CONTEXT", False)
-        else ""
-    )
+    metadata_context = ""
     query_text = (
         f"{base_query_text}\n\n{metadata_context}"
         if metadata_context else base_query_text
@@ -265,7 +223,7 @@ def _build_query(sample, args) -> _MemoryQuery:
 
 def _load_images_for_retrieval(sample, args) -> Optional[List[Any]]:
     """Load sample images for multimodal experience retrieval/decomposition."""
-    image_folder = getattr(args, "image_folder", None)
+    image_folder = args.image_folder
     if not image_folder:
         return None
 
@@ -274,16 +232,14 @@ def _load_images_for_retrieval(sample, args) -> Optional[List[Any]]:
         return None
 
     images = []
-    max_pixels = getattr(args, "max_pixels", 2_000_000)
-    min_pixels = getattr(args, "min_pixels", 40_000)
     for image_path in image_paths:
         full_path = os.path.join(image_folder, image_path)
         if not os.path.exists(full_path):
             print(f"  [Retrieval] Warning: Image file not found: {full_path}")
             continue
         try:
-            original_image = fetch_image({"image": full_path, "max_pixels": max_pixels})
-            images.append(process_image(original_image, max_pixels, min_pixels))
+            original_image = fetch_image({"image": full_path, "max_pixels": MAX_PIXELS})
+            images.append(process_image(original_image, MAX_PIXELS, MIN_PIXELS))
         except Exception as exc:
             logger.warning("Failed to load image from %s: %s", image_path, exc, exc_info=True)
             print(f"  [Retrieval] Warning: Failed to load image from {image_path}: {exc}")
@@ -298,27 +254,15 @@ def _retrieve_experiences(query: _MemoryQuery, args, experience_retriever, quest
     if experience_retriever is None:
         return {}, {}
 
-    top_k = getattr(args, 'experience_retrieval_top_k', 3)
-    subtask_top_k = _candidate_pool_top_k(
-        top_k,
-        getattr(args, 'experience_retrieval_subtask_top_k', None),
-        "EXPERIENCE_RETRIEVAL_SUBTASK_TOP_K",
+    top_k = args.experience_retrieval_top_k
+    subtask_top_k = _candidate_pool_top_k(top_k)
+    retrieved_exps, retrieval_info = experience_retriever.retrieve_with_decomposition(
+        task_description=query.query_text,
+        top_k=top_k,
+        min_similarity=args.experience_retrieval_min_similarity,
+        subtask_top_k=subtask_top_k,
+        images=query.images,
     )
-    if getattr(args, 'experience_retrieval_decomposition', False):
-        retrieved_exps, retrieval_info = experience_retriever.retrieve_with_decomposition(
-            task_description=query.query_text,
-            top_k=top_k,
-            min_similarity=getattr(args, 'experience_retrieval_min_similarity', 0.0),
-            subtask_top_k=subtask_top_k,
-            images=query.images,
-        )
-    else:
-        retrieved_exps, retrieval_info = experience_retriever.retrieve(
-            query=query.query_text,
-            top_k=subtask_top_k,
-            min_similarity=getattr(args, 'experience_retrieval_min_similarity', 0.0),
-            images=query.images,
-        )
 
     if not retrieved_exps:
         print(f"  [Retrieval] No relevant experiences found for {question_id}")
@@ -327,38 +271,29 @@ def _retrieve_experiences(query: _MemoryQuery, args, experience_retriever, quest
 
 def _retrieve_skills(query: _MemoryQuery, args, experience_retriever, retrieval_info: Dict[str, Any], question_id: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Dict[str, Any]]:
     """Retrieve modular skill candidates and the experience library they link to."""
-    skill_enabled = getattr(args, 'skill_inference', False) and getattr(args, 'skill_library', None)
-    if not skill_enabled:
-        return [], {}, {}
-
     skill_index = load_skill_index(args.skill_library)
     modular_index_exists = os.path.exists(skill_index_path(args.skill_library))
     has_modular_skill_index = modular_index_exists or bool(skill_index.get("skills"))
 
     all_experiences = _experience_library_for_skill_retrieval(args, experience_retriever)
 
-    skill_top_k = getattr(args, 'skill_retrieval_top_k', 3)
-    skill_candidate_top_k = _candidate_pool_top_k(
-        skill_top_k,
-        getattr(args, 'skill_retrieval_candidate_top_k', None),
-        "SKILL_RETRIEVAL_CANDIDATE_TOP_K",
-    )
+    skill_top_k = args.skill_retrieval_top_k
+    skill_candidate_top_k = _candidate_pool_top_k(skill_top_k)
     skill_candidates, skill_retrieval_info = retrieve_skills_for_task(
         args.skill_library,
         query.query_text,
         retrieval_info=retrieval_info,
         top_k=skill_candidate_top_k,
-        min_similarity=getattr(args, 'skill_retrieval_min_similarity', 0.0),
+        min_similarity=args.skill_retrieval_min_similarity,
         available_experience_ids=_available_experience_ids(all_experiences),
         query_metadata_tags=query.metadata_tags,
         embedding_model=os.environ.get("EXPERIENCE_EMBEDDING_MODEL", "text-embedding-3-small"),
         embedding_api_key=(
-            getattr(args, 'experience_embedding_api_key', None)
-            or os.environ.get("EXPERIENCE_EMBEDDING_API_KEY")
+            os.environ.get("EXPERIENCE_EMBEDDING_API_KEY")
             or os.environ.get("OPENAI_API_KEY")
         ),
         embedding_endpoint=_embedding_endpoint(args),
-        enable_cache=getattr(args, 'experience_embedding_cache_enable', True),
+        enable_cache=True,
     )
     skill_candidates = skill_candidates or []
     if skill_candidates:
@@ -432,8 +367,8 @@ def _rerank_memory(query: _MemoryQuery, args, state: _MemoryPipelineState, exper
             candidate_skills=state.skill_candidates,
             candidate_experiences=candidate_exps,
             llm=_llm_client_for_memory(state, experience_retriever),
-            max_skills=getattr(args, 'memory_rerank_top_skills', 2),
-            max_experiences=getattr(args, 'memory_rerank_top_experiences', 8),
+            max_skills=args.memory_rerank_top_skills,
+            max_experiences=args.memory_rerank_top_experiences,
             debug_dir=sample_dir,
             question_id=question_id,
             query_metadata_tags=query.metadata_tags,
@@ -449,7 +384,7 @@ def _rerank_memory(query: _MemoryQuery, args, state: _MemoryPipelineState, exper
             print(f"  [Skill] Selected modular skill(s): {', '.join(selected_skill_ids)}")
     except Exception as e:
         print(f"  [Skill] Warning: failed to rerank skill-linked memories: {e}")
-        state.selected_skills = state.skill_candidates[:getattr(args, 'memory_rerank_top_skills', 2)]
+        state.selected_skills = state.skill_candidates[:args.memory_rerank_top_skills]
         linked_exps = collect_linked_experiences(state.selected_skills, state.all_experiences)
         state.linked_experience_ids = list(linked_exps.keys())
         state.retrieved_exps = dict(state.retrieved_exps or {})
@@ -497,25 +432,12 @@ def _filter_and_rewrite_memory(query: _MemoryQuery, args, state: _MemoryPipeline
 
 def reload_experiences(args, base_system_prompt, experience_retriever=None):
     """Reload the memory library after training updates."""
-    if not (getattr(args, 'experience_enable', False) and args.experience_library):
-        return base_system_prompt
-    
     try:
         exps = load_experiences(args.experience_library)
-        use_retrieval = getattr(args, 'experience_retrieval', False)
-
-        if use_retrieval and experience_retriever is not None:
+        if experience_retriever is not None:
             print(f"  Updating experience retriever with {len(exps)} experiences...")
             experience_retriever.update_experiences(exps, incremental=True)
-            print(f"  Experience retriever updated successfully.")
-            return base_system_prompt
-
-        injection_text = format_for_prompt(exps, max_items=getattr(args, 'experience_max_items', 256))
-        if injection_text:
-            system_prompt = (injection_text + "\n\n" + base_system_prompt) if base_system_prompt else injection_text
-            set_processors_prompts(system_prompt)
-            print(f"  Reloaded {len(exps)} experiences for next batch.")
-            return system_prompt
+            print("  Experience retriever updated successfully.")
     except Exception as e:
         print(f"  Warning: Failed to reload experiences: {e}")
         import traceback
@@ -530,7 +452,7 @@ def _direct_tool_plan_score(exp_id: str, record: Dict[str, Any], similarity_scor
         return None
     if not record.get("tool_sequence"):
         return None
-    enabled_tools = enabled_callable_tools()
+    enabled_tools = set(callable_tools())
     has_callable_tool = any(
         str(tool).strip() in enabled_tools
         for tool in record.get("tool_tags", []) or []
@@ -546,11 +468,11 @@ def _direct_tool_plan_score(exp_id: str, record: Dict[str, Any], similarity_scor
         return None
 
     stats = record.get("stats") if isinstance(record.get("stats"), dict) else {}
-    score = safe_float(similarity_scores.get(exp_id), 0.0)
-    score += 0.30 * safe_float(stats.get("validation_average_score"), 0.0)
-    score += 0.15 * safe_float(stats.get("validation_pass_rate"), 0.0)
-    score += 0.02 * min(5, safe_int(stats.get("support_count"), 1))
-    score += 0.05 * safe_float(record.get("confidence"), 0.0)
+    score = float(similarity_scores.get(exp_id, 0.0))
+    score += 0.30 * float(stats.get("validation_average_score", 0.0))
+    score += 0.15 * float(stats.get("validation_pass_rate", 0.0))
+    score += 0.02 * min(5, int(stats.get("support_count", 1)))
+    score += 0.05 * float(record.get("confidence", 0.0))
     if stats.get("supervised_correction"):
         score += 0.05
     if stats.get("recovered_from_failure") or record.get("recovery_status"):
@@ -566,7 +488,7 @@ def _select_direct_tool_plan_experiences(
     if not experiences:
         return {}
     similarity_scores = retrieval_info.get("similarity_scores", {}) if isinstance(retrieval_info, dict) else {}
-    max_items = env_int("DIRECT_EXPERIENCE_TOOL_PLAN_MAX_EXPERIENCES", 2)
+    max_items = DIRECT_EXPERIENCE_TOOL_PLAN_MAX_EXPERIENCES
     scored = []
     for exp_id, record in experiences.items():
         score = _direct_tool_plan_score(exp_id, record, similarity_scores)
@@ -595,10 +517,7 @@ def _apply_tool_plan_policy(args, state: _MemoryPipelineState, plan_experiences:
     else:
         state.memory_policy_status = "none"
     if state.memory_policy_status == "validated_policy":
-        try:
-            state.memory_policy_temperature = env_float("VALIDATED_MEMORY_POLICY_TEMPERATURE", 0.2)
-        except ValueError:
-            state.memory_policy_temperature = 0.2
+        state.memory_policy_temperature = VALIDATED_MEMORY_POLICY_TEMPERATURE
 
     state.mandatory_tool_required = bool(state.mandatory_tool_plan)
     state.mandatory_tool_required_tools = state.mandatory_tool_plan_tools if state.mandatory_tool_plan else []
@@ -621,7 +540,7 @@ def _build_tool_plan(state: _MemoryPipelineState, question_id: str) -> Dict[str,
         state.mandatory_tool_plan, state.mandatory_tool_plan_tools = format_executable_tool_plan_for_prompt(
             state.selected_skills,
             plan_experiences,
-            max_steps=6 if state.selected_skills else env_int("DIRECT_EXPERIENCE_TOOL_PLAN_MAX_STEPS", 3),
+            max_steps=6 if state.selected_skills else DIRECT_EXPERIENCE_TOOL_PLAN_MAX_STEPS,
         )
         if not state.mandatory_tool_plan:
             state.direct_tool_plan_experience_ids = []
@@ -636,9 +555,8 @@ def _build_tool_plan(state: _MemoryPipelineState, question_id: str) -> Dict[str,
 
 def _build_injection(query: _MemoryQuery, args, state: _MemoryPipelineState, sample_dir: str, question_id: str) -> str:
     """Build the final prompt injection from tool plan, selected skills, and experiences."""
-    skill_enabled = getattr(args, 'skill_inference', False) and getattr(args, 'skill_library', None)
     skill_injection = ""
-    if skill_enabled and state.selected_skills:
+    if state.selected_skills:
         skill_injection = _process_skill(state.selected_skills, sample_dir, question_id)
 
     plan_experiences = _build_tool_plan(state, question_id)
@@ -714,7 +632,7 @@ def retrieve_experiences_for_sample(sample, args, experience_retriever, base_sys
     Pipeline: build query -> retrieve memories -> rerank -> filter -> inject.
     """
     exp_enabled = experience_retriever is not None
-    skill_enabled = getattr(args, 'skill_inference', False) and getattr(args, 'skill_library', None)
+    skill_enabled = bool(args.skill_library)
 
     if not (exp_enabled or skill_enabled):
         return _finalize_prompt(args, base_system_prompt, update_global_prompts)
@@ -724,7 +642,7 @@ def retrieve_experiences_for_sample(sample, args, experience_retriever, base_sys
 
     try:
         query = _build_query(sample, args)
-        state = _MemoryPipelineState(use_rewrite=getattr(args, 'experience_retrieval_rewrite', False))
+        state = _MemoryPipelineState(use_rewrite=True)
 
         state.retrieved_exps, state.retrieval_info = _retrieve_experiences(
             query, args, experience_retriever, question_id

@@ -15,8 +15,6 @@ from prompts.skill_generation_templates import (
     FALLBACK_SKILL_MARKDOWN_TEMPLATE,
     GENERATE_CLUSTER_SKILL_PROMPT,
 )
-from utils.env import env_bool, env_float, env_int
-
 from experience.schema import (
     ExperienceLibrary,
     format_experience_for_prompt,
@@ -65,6 +63,25 @@ DEFAULT_FALLBACK_LINE = (
     "- If the first tool result is empty or inconsistent, revise the crop/threshold/input "
     "and rerun the tool once before answering."
 )
+MAX_TASK_TAGS = 10
+MAX_TOOL_TAGS = 4
+SKILL_ID_REUSE_MIN_LINK_OVERLAP = 0.5
+SKILL_FEEDBACK_REUSE_MIN_LINK_OVERLAP = 0.34
+VALIDATION_MIN_USES_TO_DISABLE = 3
+VALIDATION_DISABLE_AVERAGE_THRESHOLD = 0.01
+VALIDATION_DISABLE_PASS_THRESHOLD = 0.0
+LOW_QUALITY_SKILL_MIN_VALIDATION_AVG = 0.12
+LOW_QUALITY_SKILL_MAX_PASS_RATE = 0.25
+RECOVERY_PROMOTE_AVERAGE_THRESHOLD = 0.25
+RECOVERY_PROMOTE_PASS_THRESHOLD = 0.50
+RECOVERY_REJECT_MIN_VALIDATION_USES = 3
+RECOVERY_REJECT_AVERAGE_THRESHOLD = 0.01
+RECOVERY_REJECT_PASS_THRESHOLD = 0.0
+MIN_VALIDATION_USES_TO_DEMOTE_RECOVERY_SKILL = 2
+RECOVERY_PENDING_REVISION_SELECTION_WEIGHT = 0.9
+ACTIONABLE_SUCCESS_MIN_EVIDENCE_SUCCESSES = 2
+ACTIONABLE_SUCCESS_MIN_EVIDENCE_RATE = 0.50
+VALIDATION_PROBE_SKILL_EXTRA_CLUSTERS = 8
 
 
 def _exp_sort_key(exp_id: str) -> Tuple[int, str]:
@@ -79,7 +96,7 @@ def _record_signature(record: Dict[str, Any]) -> Tuple[Tuple[str, ...], Tuple[st
         tag = str(tag).strip().lower()
         if tag.startswith("data_source_") or tag.startswith("task_"):
             metadata_tags.append(tag)
-    max_task_tags = env_int("SKILL_CLUSTER_MAX_TASK_TAGS", 10)
+    max_task_tags = MAX_TASK_TAGS
     ordered_task_tags: List[str] = []
     for tag in metadata_tags + sorted(cluster_task_tags(record)):
         if tag not in ordered_task_tags:
@@ -88,7 +105,7 @@ def _record_signature(record: Dict[str, Any]) -> Tuple[Tuple[str, ...], Tuple[st
             break
     task_tags = tuple(ordered_task_tags) or ("general",)
     tool_tags = tuple(sorted(record.get("tool_tags", []) or ["reasoning"]))
-    tool_tags = tool_tags[: env_int("SKILL_CLUSTER_MAX_TOOL_TAGS", 4)]
+    tool_tags = tool_tags[:MAX_TOOL_TAGS]
     return task_tags, tool_tags
 
 
@@ -142,9 +159,9 @@ def _majority_tags(records: List[Dict[str, Any]], key: str) -> List[str]:
             if str(tag).startswith(("data_source_", "task_")) and cnt >= threshold
         )
         ordered = [tag for tag, _ in counter.most_common() if tag in selected]
-        return ordered[: env_int("SKILL_CLUSTER_MAX_TASK_TAGS", 10)] or [counter.most_common(1)[0][0]]
+        return ordered[:MAX_TASK_TAGS] or [counter.most_common(1)[0][0]]
     ordered = [tag for tag, _ in counter.most_common() if tag in selected]
-    return ordered[: env_int("SKILL_CLUSTER_MAX_TOOL_TAGS", 4)] or [counter.most_common(1)[0][0]]
+    return ordered[:MAX_TOOL_TAGS] or [counter.most_common(1)[0][0]]
 
 
 def _cluster_by_tags_and_content(
@@ -341,7 +358,7 @@ def _find_previous_skill_by_overlap(
     best_id, _, best_score = _best_previous_skill_by_overlap(
         index, linked_experience_ids, skill_type, active_ids
     )
-    min_overlap = env_float("SKILL_ID_REUSE_MIN_LINK_OVERLAP", 0.5)
+    min_overlap = SKILL_ID_REUSE_MIN_LINK_OVERLAP
     return best_id if best_score >= min_overlap else ""
 
 
@@ -405,7 +422,7 @@ def _previous_validation_stats_by_overlap(
         denominator="min",
         require_validation=True,
     )
-    min_score = env_float("SKILL_FEEDBACK_REUSE_MIN_LINK_OVERLAP", 0.34)
+    min_score = SKILL_FEEDBACK_REUSE_MIN_LINK_OVERLAP
     if best_score < min_score:
         return {}
     return {
@@ -424,25 +441,25 @@ def _previous_validation_stats_by_overlap(
 
 
 def _validation_should_disable_skill(used: int, quality: float, pass_rate: float) -> bool:
-    min_disable_uses = env_int("VALIDATION_MIN_USES_TO_DISABLE", 3)
-    disable_avg = env_float("VALIDATION_DISABLE_AVERAGE_THRESHOLD", 0.01)
-    disable_pass = env_float("VALIDATION_DISABLE_PASS_THRESHOLD", 0.0)
-    weak_min_uses = env_int("MIN_VALIDATION_USES_TO_DEMOTE_SKILL", min_disable_uses)
-    weak_avg = env_float("LOW_QUALITY_SKILL_MIN_VALIDATION_AVG", 0.12)
-    weak_pass = env_float("LOW_QUALITY_SKILL_MAX_PASS_RATE", 0.25)
+    min_disable_uses = VALIDATION_MIN_USES_TO_DISABLE
+    disable_avg = VALIDATION_DISABLE_AVERAGE_THRESHOLD
+    disable_pass = VALIDATION_DISABLE_PASS_THRESHOLD
+    weak_min_uses = min_disable_uses
+    weak_avg = LOW_QUALITY_SKILL_MIN_VALIDATION_AVG
+    weak_pass = LOW_QUALITY_SKILL_MAX_PASS_RATE
     weak_validation = used >= weak_min_uses and quality < weak_avg and pass_rate <= weak_pass
     return (used >= min_disable_uses and quality <= disable_avg and pass_rate <= disable_pass) or weak_validation
 
 
 def _recovery_validation_status(used: int, quality: float, pass_rate: float) -> str:
-    promote_avg = env_float("RECOVERY_PROMOTE_AVERAGE_THRESHOLD", 0.25)
-    promote_pass = env_float("RECOVERY_PROMOTE_PASS_THRESHOLD", 0.50)
-    reject_uses = env_int("RECOVERY_REJECT_MIN_VALIDATION_USES", 3)
-    reject_avg = env_float("RECOVERY_REJECT_AVERAGE_THRESHOLD", 0.01)
-    reject_pass = env_float("RECOVERY_REJECT_PASS_THRESHOLD", 0.0)
-    weak_reject_uses = env_int("MIN_VALIDATION_USES_TO_DEMOTE_RECOVERY_SKILL", 2)
-    weak_reject_avg = env_float("LOW_QUALITY_SKILL_MIN_VALIDATION_AVG", 0.12)
-    weak_reject_pass = env_float("LOW_QUALITY_SKILL_MAX_PASS_RATE", 0.25)
+    promote_avg = RECOVERY_PROMOTE_AVERAGE_THRESHOLD
+    promote_pass = RECOVERY_PROMOTE_PASS_THRESHOLD
+    reject_uses = RECOVERY_REJECT_MIN_VALIDATION_USES
+    reject_avg = RECOVERY_REJECT_AVERAGE_THRESHOLD
+    reject_pass = RECOVERY_REJECT_PASS_THRESHOLD
+    weak_reject_uses = MIN_VALIDATION_USES_TO_DEMOTE_RECOVERY_SKILL
+    weak_reject_avg = LOW_QUALITY_SKILL_MIN_VALIDATION_AVG
+    weak_reject_pass = LOW_QUALITY_SKILL_MAX_PASS_RATE
     weak_recovery_validation = (
         used >= weak_reject_uses
         and quality < weak_reject_avg
@@ -522,8 +539,6 @@ def _reset_revised_recovery_validation(
     adds a new supervised correction to a previously weak recovery skill, reusing
     the old score can prevent the revised policy from being tested.
     """
-    if not env_bool("RESET_REVISED_RECOVERY_SKILL_VALIDATION", True):
-        return
     if metadata.get("skill_type") != "recovery_action_skill" or not isinstance(previous, dict):
         return
 
@@ -546,7 +561,7 @@ def _reset_revised_recovery_validation(
     metadata.pop("validation_quality", None)
     metadata.pop("disabled", None)
     metadata.pop("disabled_reason", None)
-    metadata["selection_weight"] = env_float("RECOVERY_PENDING_REVISION_SELECTION_WEIGHT", 0.9)
+    metadata["selection_weight"] = RECOVERY_PENDING_REVISION_SELECTION_WEIGHT
 
 
 def _inherit_validation_feedback(
@@ -784,8 +799,8 @@ def _is_actionable_success_record(record: Dict[str, Any]) -> bool:
 
     evidence_success, evidence_total = _rollout_success_evidence(record)
     if evidence_total:
-        min_success = env_int("ACTIONABLE_SUCCESS_MIN_EVIDENCE_SUCCESSES", 2)
-        min_rate = env_float("ACTIONABLE_SUCCESS_MIN_EVIDENCE_RATE", 0.50)
+        min_success = ACTIONABLE_SUCCESS_MIN_EVIDENCE_SUCCESSES
+        min_rate = ACTIONABLE_SUCCESS_MIN_EVIDENCE_RATE
         return evidence_success >= min_success and (evidence_success / max(1, evidence_total)) >= min_rate
     return True
 
@@ -875,7 +890,7 @@ def _select_skill_clusters(
     probe_clusters = [cluster for cluster in eligible if _is_extra_validation_probe_cluster(cluster, min_exps)]
     normal_clusters.sort(key=_cluster_rank_key)
     probe_clusters.sort(key=lambda cluster: (-_cluster_validation_probe_count(cluster), str(cluster["signature"])))
-    max_probe_clusters = env_int("VALIDATION_PROBE_SKILL_EXTRA_CLUSTERS", 8)
+    max_probe_clusters = VALIDATION_PROBE_SKILL_EXTRA_CLUSTERS
     return normal_clusters[:max_clusters] + probe_clusters[:max(0, max_probe_clusters)]
 
 
@@ -1200,8 +1215,7 @@ def cluster_experiences_to_skills(
             out_dir=out_dir,
             llm=llm,
         )
-        if env_bool("SKILL_INDEX_INCREMENTAL_SAVE", True):
-            save_skill_index(skill_library_path, index)
+        save_skill_index(skill_library_path, index)
 
     prune_stale_skills(index, active_skill_ids, out_dir)
     save_skill_index(skill_library_path, index)

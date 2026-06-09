@@ -9,7 +9,6 @@ from .llm_client import ExperienceLLM
 from .schema import _compact_experience_operation, _normalize_experience_operation
 from .trajectory_summary import summarize_rollouts
 from .utils import append_sample_metadata_tags, sample_metadata_tags
-from utils.env import env_bool
 from utils.artifacts import (
     RETRIEVAL_INFO_FILENAME,
     TRAJECTORY_FILENAME,
@@ -488,8 +487,6 @@ def _add_supervised_correction_ops(
     evidence_rollouts,
     all_rollouts_failed,
 ):
-    if not env_bool("ENABLE_SUPERVISED_FAILURE_CORRECTION", True):
-        return
     if not all_rollouts_failed or not str(ground_truth or "").strip():
         return
 
@@ -565,7 +562,7 @@ def _generate_raw_experience_ops(
         ground_truth,
         summaries_only,
         llm,
-        max_ops=getattr(args, 'experience_max_ops', 2),
+        max_ops=3,
         debug_dir=sample_dir,
         system_prompt=system_prompt_text,
         used_experiences=used_experiences,

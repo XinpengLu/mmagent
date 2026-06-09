@@ -10,6 +10,13 @@ from utils.artifacts import save_trajectory
 from qwen_vl_utils import fetch_image # type: ignore
 from tools import get_tool
 
+MAX_PIXELS = 2_000_000
+MIN_PIXELS = 40_000
+IMAGE_SEARCH_MAX_CALLS = 5
+WEB_SEARCH_MAX_CALLS = 7
+CODE_INTERPRETER_MAX_CALLS = 10
+
+
 class APIToolHandler:
     """Execute tools and append their observations to the active trajectory."""
 
@@ -17,24 +24,14 @@ class APIToolHandler:
         self.args = args
         self.save_dir = save_dir
         self.tool_instances = tool_instances or {}
-        self.tool_configs = getattr(args, 'tool_configs', {})
+        self.tool_configs = args.tool_configs
 
         self.tool_call_counts = {}
-        image_search_max_calls = getattr(args, 'image_search_max_calls', None)
-        web_search_max_calls = getattr(args, 'web_search_max_calls', None)
-        code_interpreter_max_calls = getattr(args, 'code_interpreter_max_calls', None)
-
-        if image_search_max_calls is None:
-            image_search_max_calls = 3
-        if web_search_max_calls is None:
-            web_search_max_calls = 5
-
         self.tool_call_limits = {
-            'image_search': image_search_max_calls,
-            'web_search': web_search_max_calls,
+            'image_search': IMAGE_SEARCH_MAX_CALLS,
+            'web_search': WEB_SEARCH_MAX_CALLS,
+            'code_interpreter': CODE_INTERPRETER_MAX_CALLS,
         }
-        if code_interpreter_max_calls is not None and int(code_interpreter_max_calls) > 0:
-            self.tool_call_limits['code_interpreter'] = int(code_interpreter_max_calls)
 
     def close(self):
         """Release cached tool instances at the end of one rollout."""
@@ -79,7 +76,7 @@ class APIToolHandler:
 
     def _resolve_image_ref(self, image_ref):
         if image_ref.startswith('http://') or image_ref.startswith('https://'):
-            return image_ref, fetch_image({'image': image_ref, 'max_pixels': self.args.max_pixels})
+            return image_ref, fetch_image({'image': image_ref, 'max_pixels': MAX_PIXELS})
 
         resolved_ref = image_ref if os.path.isabs(image_ref) else os.path.join(self.save_dir, image_ref)
         if not os.path.exists(resolved_ref):
@@ -89,7 +86,7 @@ class APIToolHandler:
 
     def _process_tool_image(self, pil_image):
         original_size = pil_image.width * pil_image.height
-        processed_image = process_image(pil_image, self.args.max_pixels, self.args.min_pixels)
+        processed_image = process_image(pil_image, MAX_PIXELS, MIN_PIXELS)
         processed_size = processed_image.width * processed_image.height
         if original_size != processed_size:
             print(f"[Image Processing] Resized: {pil_image.width}x{pil_image.height} ({original_size:,}px) -> {processed_image.width}x{processed_image.height} ({processed_size:,}px)")

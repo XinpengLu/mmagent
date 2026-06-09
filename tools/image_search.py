@@ -80,15 +80,8 @@ You only have limited search times, so please use it wisely.
         self.download_image_counter = 0  # Used to generate unique image file names
         
         # Search image compression configuration (get from config, if not provided, use default value)
-        # Get args from config (if passed via api_tool_handler, args is Namespace object)
-        args_obj = config.get('args') if config and isinstance(config, dict) else None
-        if args_obj:
-            # args is Namespace object, use getattr to access properties
-            global_max_pixels = getattr(args_obj, 'max_pixels', 2000000)
-            global_min_pixels = getattr(args_obj, 'min_pixels', 40000)
-        else:
-            global_max_pixels = 2000000
-            global_min_pixels = 40000
+        global_max_pixels = 2_000_000
+        global_min_pixels = 40_000
         
         # Search image using more strict compression parameters (configurable, default is half of global)
         if config and isinstance(config, dict):

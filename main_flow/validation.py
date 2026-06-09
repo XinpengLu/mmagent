@@ -15,7 +15,6 @@ from .validation_memory import apply_validation_feedback, calibrate_validation_s
 from .validation_reflection import reflect_validation_failures
 from validation_tools.history import record_validation_stage
 from validation_tools.reporting import write_validation_report
-from utils.env import env_bool, env_float, env_int
 from utils.artifacts import DATASET_SUMMARY_FILENAME
 
 
@@ -122,7 +121,7 @@ def _validation_stages_to_run(paths: _ValidationPaths) -> tuple[list[dict[str, A
             "Run benchmark/build_benchmark_subset.py before training."
         )
     stages = _load_stage_manifest(paths.stage_dir)
-    resume_stage = env_int("VALIDATION_RESUME_STAGE", 1)
+    resume_stage = 1
     if resume_stage < 1:
         raise SystemExit("Error: VALIDATION_RESUME_STAGE must be >= 1")
     if resume_stage > len(stages):
@@ -137,12 +136,6 @@ def _prepare_validation_dirs(paths: _ValidationPaths, resume_stage: int) -> None
     paths.history_path.parent.mkdir(parents=True, exist_ok=True)
     paths.train_stage_root.mkdir(parents=True, exist_ok=True)
     paths.val_output_root.mkdir(parents=True, exist_ok=True)
-
-
-def _print_validation_stage(stage_index: int, train_seen: int) -> None:
-    print("=" * 70)
-    print(f"Validation stage {stage_index}: train_samples_seen={train_seen}")
-    print("=" * 70)
 
 
 def _copy_train_stage_metrics(paths: _ValidationPaths, stage_index: int) -> None:
@@ -217,9 +210,9 @@ def _apply_stage_feedback(
         stage=str(stage_index),
         output_json=val_stage_dir / "feedback.json",
         k=val_k,
-        min_validation_uses_to_disable=env_int("VALIDATION_MIN_USES_TO_DISABLE", 3),
-        disable_average_threshold=env_float("VALIDATION_DISABLE_AVERAGE_THRESHOLD", 0.01),
-        disable_pass_threshold=env_float("VALIDATION_DISABLE_PASS_THRESHOLD", 0.0),
+        min_validation_uses_to_disable=3,
+        disable_average_threshold=0.01,
+        disable_pass_threshold=0.0,
     )
 
 
@@ -243,10 +236,8 @@ def _run_validation_reflection(
         skill_library=validation_memory_root / "skill_library.anchor",
         k=val_k,
         max_samples=int(_validation_setting(ctx, "reflection_max_samples", 4)),
-        min_average=env_float("VALIDATION_REFLECTION_MIN_AVERAGE", 0.25),
+        min_average=0.25,
     )
-    if not env_bool("VALIDATION_REBUILD_SKILLS_AFTER_REFLECTION", True):
-        return
     if _reflection_has_writeback(reflection_json):
         print("Validation reflection already rebuilt skills during write-back.")
         calibrate_validation_status(
@@ -287,15 +278,16 @@ def _run_one_validation_stage(
     stage_index = int(row["stage_index"])
     train_seen = int(row["train_samples_seen"])
     stage_json = Path(row["resolved_path"])
-    _print_validation_stage(stage_index, train_seen)
+    print("=" * 70)
+    print(f"Validation stage {stage_index}: train_samples_seen={train_seen}")
+    print("=" * 70)
 
     val_stage_dir = paths.val_output_root / f"val_stage_{stage_index}"
     val_stage_dir.mkdir(parents=True, exist_ok=True)
-    if env_bool("VALIDATION_CALIBRATE_MEMORY_STATUS", True):
-        calibrate_validation_status(
-            memory_root=paths.train_memory_root,
-            output_json=val_stage_dir / "status_calibration.json",
-        )
+    calibrate_validation_status(
+        memory_root=paths.train_memory_root,
+        output_json=val_stage_dir / "status_calibration.json",
+    )
 
     _run_training_stage(benchmark, ctx, paths, stage_index, train_seen, stage_json)
     validation_memory_root = _validation_memory_for_stage(paths, stage_index)

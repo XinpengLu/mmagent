@@ -8,7 +8,6 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 
-from utils.env import env_bool, env_float, env_int
 from .index import load_skill_index, skill_index_path, skill_root
 from .filters import (
     allow_unvalidated_recovery_inference,
@@ -17,13 +16,17 @@ from .filters import (
     skill_unvalidated_recovery,
 )
 from .utils import (
+    callable_tools,
     cosine_scores,
-    enabled_callable_tools,
     metadata_fields,
     metadata_selection_weight,
     tag_tokens,
     truncate_text,
 )
+
+
+VALIDATION_PROBE_EXTRA_SKILL_CANDIDATES = 3
+VALIDATION_PROBE_EXTRA_SKILL_SCORE = 0.12
 
 
 def _read_skill_content(item: Dict[str, Any]) -> str:
@@ -101,13 +104,16 @@ def _metadata_first_allows(candidate_tags: Iterable[str], query_metadata_tags: I
 
 
 def _recovery_probe_enabled() -> bool:
-    return env_bool("MMAGENT_VALIDATION_PHASE", False) or env_bool("MMAGENT_TRAIN_PHASE", False)
+    return (
+        os.environ.get("MMAGENT_VALIDATION_PHASE") == "true"
+        or os.environ.get("MMAGENT_TRAIN_PHASE") == "true"
+    )
 
 
 def _recovery_probe_phase() -> str:
-    if env_bool("MMAGENT_TRAIN_PHASE", False):
+    if os.environ.get("MMAGENT_TRAIN_PHASE") == "true":
         return "train"
-    if env_bool("MMAGENT_VALIDATION_PHASE", False):
+    if os.environ.get("MMAGENT_VALIDATION_PHASE") == "true":
         return "validation"
     return "unknown"
 
@@ -142,10 +148,11 @@ def _metadata_filter_skills(
 def _can_probe_tool_plan(item: Dict[str, Any]) -> bool:
     if not item.get("requires_tool_plan", True):
         return False
+    enabled_tools = set(callable_tools())
     tools = {
         str(tool).strip()
         for tool in item.get("tool_tags", []) or []
-        if str(tool).strip() in enabled_callable_tools()
+        if str(tool).strip() in enabled_tools
     }
     if not tools:
         return False
@@ -184,7 +191,7 @@ def _add_validation_probe_candidates(
     if not _recovery_probe_enabled():
         return []
 
-    max_probe_extras = env_int("VALIDATION_PROBE_EXTRA_SKILL_CANDIDATES", 3)
+    max_probe_extras = VALIDATION_PROBE_EXTRA_SKILL_CANDIDATES
     if max_probe_extras <= 0:
         return []
 
@@ -211,7 +218,7 @@ def _add_validation_probe_candidates(
         ))
 
     probe_candidates.sort(key=lambda row: row[0], reverse=True)
-    probe_score = env_float("VALIDATION_PROBE_EXTRA_SKILL_SCORE", 0.12)
+    probe_score = VALIDATION_PROBE_EXTRA_SKILL_SCORE
     added: List[str] = []
     for _, skill_id, item, content, metadata_weight, selection_weight in probe_candidates[:max_probe_extras]:
         candidate_by_id[skill_id] = {

@@ -210,7 +210,7 @@ def _summarize_memory_usage(output_dir: str) -> Dict[str, Any]:
 
 def _summarize_memory_bank(args) -> Dict[str, Any]:
     stats: Dict[str, Any] = {}
-    exp_path = getattr(args, "experience_library", None)
+    exp_path = args.experience_library
     if exp_path and os.path.exists(exp_path):
         raw = read_json(exp_path)
         exps = raw.get("experiences", raw) if isinstance(raw, dict) else {}
@@ -221,7 +221,7 @@ def _summarize_memory_bank(args) -> Dict[str, Any]:
             stats["experience_with_tool_sequence"] = sum(bool(v.get("tool_sequence")) for v in values)
             stats["experience_with_validation_checks"] = sum(bool(v.get("validation_checks")) for v in values)
             stats["experience_with_fallback_plan"] = sum(bool(v.get("fallback_plan")) for v in values)
-    skill_path = getattr(args, "skill_library", None)
+    skill_path = args.skill_library
     if skill_path:
         index = load_skill_index(skill_path)
         skills = index.get("skills", {}) if isinstance(index, dict) else {}
@@ -272,13 +272,9 @@ def compute_dataset_summary(data, args):
         "memory_usage": _summarize_memory_usage(args.output_dir),
         "memory_bank": _summarize_memory_bank(args),
         "config": {
-            "system_prompt_key": getattr(args, "system_prompt_key", None),
-            "experience_retrieval": bool(getattr(args, "experience_retrieval", False)),
-            "experience_retrieval_decomposition": bool(getattr(args, "experience_retrieval_decomposition", False)),
-            "experience_retrieval_rewrite": bool(getattr(args, "experience_retrieval_rewrite", False)),
-            "skill_inference": bool(getattr(args, "skill_inference", False)),
-            "memory_rerank_top_skills": getattr(args, "memory_rerank_top_skills", None),
-            "memory_rerank_top_experiences": getattr(args, "memory_rerank_top_experiences", None),
+            "system_prompt_key": args.system_prompt_key,
+            "memory_rerank_top_skills": args.memory_rerank_top_skills,
+            "memory_rerank_top_experiences": args.memory_rerank_top_experiences,
         },
     }
     write_json(os.path.join(args.output_dir, DATASET_SUMMARY_FILENAME), dataset_summary)

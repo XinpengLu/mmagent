@@ -2,19 +2,65 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, Iterable, Optional, Tuple
 
 from experience.schema import (
     ExperienceLibrary,
     normalize_experience_library,
 )
-from utils.env import env_flag, env_float, env_int
 from .utils import (
     metadata_field_conflicts,
     metadata_field_matches,
     metadata_fields,
     record_metadata_fields,
 )
+
+
+TRAIN_SUPPORTED_RECOVERY_MIN_USES = 2
+TRAIN_SUPPORTED_RECOVERY_MIN_SUCCESS_RATE = 0.50
+ACTION_SKILL_MIN_SUCCESS_SUPPORT = 2
+SINGLETON_ACTION_SKILL_MIN_CONFIDENCE = 0.65
+SINGLETON_ACTION_SKILL_SELECTION_WEIGHT = 0.55
+
+MIN_VALIDATION_USES_TO_SKIP_RECOVERY_EXPERIENCE = 3
+MIN_VALIDATION_USES_TO_SKIP_FAILURE_EXPERIENCE = 1
+MIN_VALIDATION_USES_TO_SKIP_EXPERIENCE = 2
+BAD_EXPERIENCE_MAX_VALIDATION_AVG = 0.01
+BAD_EXPERIENCE_MAX_VALIDATION_PASS = 0.0
+MIN_VALIDATION_USES_TO_DEMOTE_RECOVERY_EXPERIENCE = 2
+MIN_VALIDATION_USES_TO_DEMOTE_EXPERIENCE = 2
+LOW_QUALITY_EXPERIENCE_MIN_VALIDATION_AVG = 0.12
+LOW_QUALITY_EXPERIENCE_MAX_PASS_RATE = 0.25
+
+MIN_VALIDATION_USES_TO_DEMOTE_RECOVERY_SKILL = 2
+MIN_VALIDATION_USES_TO_DEMOTE_SKILL = 3
+LOW_QUALITY_SKILL_MIN_VALIDATION_AVG = 0.12
+LOW_QUALITY_SKILL_MAX_PASS_RATE = 0.25
+MIN_VALIDATION_USES_TO_SKIP_SKILL = 3
+VALIDATION_SKIP_AVERAGE_THRESHOLD = 0.01
+VALIDATION_SKIP_PASS_THRESHOLD = 0.0
+
+MIN_MEMORY_USES_TO_DOWNWEIGHT_SKILL = 4
+MEMORY_USAGE_SKIP_SUCCESS_RATE = 0.25
+MEMORY_USAGE_WEAK_SUCCESS_RATE = 0.45
+MEMORY_USAGE_STRONG_SUCCESS_RATE = 0.65
+
+RECOVERY_PENDING_REVISION_SELECTION_WEIGHT = 0.9
+RECOVERY_CANDIDATE_WITH_FEEDBACK_SELECTION_WEIGHT = 0.35
+RECOVERY_CANDIDATE_SELECTION_WEIGHT = 0.25
+RECOVERY_VALIDATED_SELECTION_WEIGHT = 1.15
+RECOVERY_CANDIDATE_RETRY_MIN_VALIDATION_USES = 1
+RECOVERY_CANDIDATE_RETRY_MIN_AVERAGE = 0.20
+
+MEMORY_SELECTION_MISMATCH_ALLOW_RAW_SCORE = 0.38
+MEMORY_SELECTION_MIN_SKILL_SCORE = 0.06
+MEMORY_SELECTION_MIN_RAW_SKILL_SCORE = 0.18
+FAILURE_ONLY_KEEP_MIN_SIMILARITY = 0.25
+SEARCH_FAILURE_ONLY_KEEP_MIN_SIMILARITY = 0.32
+MAX_FAILURE_ONLY_EXPERIENCE_ITEMS = 2
+MIN_FAILURE_EXPERIENCE_USES_TO_FILTER = 3
+FAILURE_EXPERIENCE_MIN_SUCCESS_RATE = 0.30
 
 
 def _stats_of(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -27,13 +73,6 @@ def _support_counts_of(item: Dict[str, Any]) -> Dict[str, Any]:
     return counts if isinstance(counts, dict) else {}
 
 
-def _float_value(value: Any, default: float = 0.0) -> float:
-    try:
-        return float(value or default)
-    except (TypeError, ValueError):
-        return default
-
-
 def _validation_scores(stats: Dict[str, Any], average_default: Any = 0.0) -> Tuple[float, float]:
     try:
         return (
@@ -44,18 +83,12 @@ def _validation_scores(stats: Dict[str, Any], average_default: Any = 0.0) -> Tup
         return 0.0, 0.0
 
 
-def _env_float_or_default(name: str, default: float) -> float:
-    try:
-        return env_float(name, default)
-    except (TypeError, ValueError):
-        return default
-
-
 def allow_unvalidated_recovery_inference() -> bool:
     """Whether unverified failure-to-success candidates can be injected."""
-    if env_flag("ENABLE_UNVALIDATED_RECOVERY_INFERENCE"):
-        return True
-    return env_flag("MMAGENT_VALIDATION_PHASE") or env_flag("MMAGENT_TRAIN_PHASE")
+    return (
+        os.environ.get("MMAGENT_VALIDATION_PHASE") == "true"
+        or os.environ.get("MMAGENT_TRAIN_PHASE") == "true"
+    )
 
 
 def experience_unvalidated_recovery(record: Dict[str, Any]) -> bool:
@@ -86,16 +119,14 @@ def recovery_has_train_support(item: Dict[str, Any]) -> bool:
         or str(item.get("recovery_status") or stats.get("recovery_status") or "") == "candidate_unverified"
     ):
         return False
-    if not env_flag("ENABLE_TRAIN_SUPPORTED_RECOVERY_VALIDATION_PROBE", True):
-        return False
-    if not env_flag("MMAGENT_VALIDATION_PHASE"):
+    if os.environ.get("MMAGENT_VALIDATION_PHASE") != "true":
         return False
     used = int(stats.get("used_count", 0) or 0)
     success = int(stats.get("success_after_used", 0) or 0)
     failure = int(stats.get("failure_after_used", 0) or 0)
     judged = success + failure
-    min_uses = env_int("TRAIN_SUPPORTED_RECOVERY_MIN_USES", 2)
-    min_rate = env_float("TRAIN_SUPPORTED_RECOVERY_MIN_SUCCESS_RATE", 0.50)
+    min_uses = TRAIN_SUPPORTED_RECOVERY_MIN_USES
+    min_rate = TRAIN_SUPPORTED_RECOVERY_MIN_SUCCESS_RATE
     return used >= min_uses and judged >= min_uses and (success / max(1, judged)) >= min_rate
 
 
@@ -110,13 +141,13 @@ def _singleton_action_skill_allowed(item: Dict[str, Any]) -> bool:
         return True
     support_counts = _support_counts_of(item)
     success_support = int(support_counts.get("success", 0) or 0)
-    min_action_support = env_int("ACTION_SKILL_MIN_SUCCESS_SUPPORT", 2)
+    min_action_support = ACTION_SKILL_MIN_SUCCESS_SUPPORT
     if success_support >= min_action_support:
         return True
     if _explicit_task_count(item) != 1:
         return False
-    confidence = _float_value(item.get("confidence"), 0.0)
-    min_conf = env_float("SINGLETON_ACTION_SKILL_MIN_CONFIDENCE", 0.65)
+    confidence = float(item.get("confidence", 0.0))
+    min_conf = SINGLETON_ACTION_SKILL_MIN_CONFIDENCE
     return confidence >= min_conf
 
 
@@ -133,17 +164,17 @@ def experience_failed_validation(record: Dict[str, Any]) -> bool:
     recovery_status = record.get("recovery_status") or stats.get("recovery_status")
     is_recovery = bool(stats.get("recovered_from_failure")) or bool(recovery_status)
     if is_recovery:
-        min_validation_uses = env_int("MIN_VALIDATION_USES_TO_SKIP_RECOVERY_EXPERIENCE", 3)
+        min_validation_uses = MIN_VALIDATION_USES_TO_SKIP_RECOVERY_EXPERIENCE
     elif record.get("kind") == "failure":
-        min_validation_uses = env_int("MIN_VALIDATION_USES_TO_SKIP_FAILURE_EXPERIENCE", 1)
+        min_validation_uses = MIN_VALIDATION_USES_TO_SKIP_FAILURE_EXPERIENCE
     else:
-        min_validation_uses = env_int("MIN_VALIDATION_USES_TO_SKIP_EXPERIENCE", 2)
+        min_validation_uses = MIN_VALIDATION_USES_TO_SKIP_EXPERIENCE
     if val_used < min_validation_uses:
         return False
 
     val_avg, val_pass = _validation_scores(stats)
-    max_bad_validation_avg = env_float("BAD_EXPERIENCE_MAX_VALIDATION_AVG", 0.01)
-    max_bad_validation_pass = env_float("BAD_EXPERIENCE_MAX_VALIDATION_PASS", 0.0)
+    max_bad_validation_avg = BAD_EXPERIENCE_MAX_VALIDATION_AVG
+    max_bad_validation_pass = BAD_EXPERIENCE_MAX_VALIDATION_PASS
     return val_avg <= max_bad_validation_avg and val_pass <= max_bad_validation_pass
 
 
@@ -187,15 +218,15 @@ def experience_low_validation_quality(record: Dict[str, Any]) -> bool:
     recovery_status = record.get("recovery_status") or stats.get("recovery_status")
     is_recovery = bool(stats.get("recovered_from_failure")) or bool(recovery_status)
     if is_recovery:
-        min_uses = env_int("MIN_VALIDATION_USES_TO_DEMOTE_RECOVERY_EXPERIENCE", 2)
+        min_uses = MIN_VALIDATION_USES_TO_DEMOTE_RECOVERY_EXPERIENCE
     else:
-        min_uses = env_int("MIN_VALIDATION_USES_TO_DEMOTE_EXPERIENCE", 2)
+        min_uses = MIN_VALIDATION_USES_TO_DEMOTE_EXPERIENCE
     if val_used < min_uses:
         return False
 
     val_avg, val_pass = _validation_scores(stats)
-    min_avg = env_float("LOW_QUALITY_EXPERIENCE_MIN_VALIDATION_AVG", 0.12)
-    max_pass = env_float("LOW_QUALITY_EXPERIENCE_MAX_PASS_RATE", 0.25)
+    min_avg = LOW_QUALITY_EXPERIENCE_MIN_VALIDATION_AVG
+    max_pass = LOW_QUALITY_EXPERIENCE_MAX_PASS_RATE
     return val_avg < min_avg and val_pass <= max_pass
 
 
@@ -210,15 +241,15 @@ def skill_low_validation_quality(item: Dict[str, Any]) -> bool:
         return False
 
     if item.get("skill_type") == "recovery_action_skill":
-        min_uses = env_int("MIN_VALIDATION_USES_TO_DEMOTE_RECOVERY_SKILL", 2)
+        min_uses = MIN_VALIDATION_USES_TO_DEMOTE_RECOVERY_SKILL
     else:
-        min_uses = env_int("MIN_VALIDATION_USES_TO_DEMOTE_SKILL", 3)
+        min_uses = MIN_VALIDATION_USES_TO_DEMOTE_SKILL
     if val_used < min_uses:
         return False
 
     val_avg, val_pass = _validation_scores(stats, item.get("validation_quality", 0.0))
-    min_avg = env_float("LOW_QUALITY_SKILL_MIN_VALIDATION_AVG", 0.12)
-    max_pass = env_float("LOW_QUALITY_SKILL_MAX_PASS_RATE", 0.25)
+    min_avg = LOW_QUALITY_SKILL_MIN_VALIDATION_AVG
+    max_pass = LOW_QUALITY_SKILL_MAX_PASS_RATE
     return val_avg < min_avg and val_pass <= max_pass
 
 
@@ -246,10 +277,10 @@ def _usage_adjusted_skill_weight(item: Dict[str, Any], weight: float) -> float:
         return weight
 
     usage_rate = success_after_used / max(1, judged_uses)
-    min_usage_uses = env_int("MIN_MEMORY_USES_TO_DOWNWEIGHT_SKILL", 4)
-    skip_rate = env_float("MEMORY_USAGE_SKIP_SUCCESS_RATE", 0.25)
-    weak_rate = env_float("MEMORY_USAGE_WEAK_SUCCESS_RATE", 0.45)
-    strong_rate = env_float("MEMORY_USAGE_STRONG_SUCCESS_RATE", 0.65)
+    min_usage_uses = MIN_MEMORY_USES_TO_DOWNWEIGHT_SKILL
+    skip_rate = MEMORY_USAGE_SKIP_SUCCESS_RATE
+    weak_rate = MEMORY_USAGE_WEAK_SUCCESS_RATE
+    strong_rate = MEMORY_USAGE_STRONG_SUCCESS_RATE
     if used_count >= min_usage_uses and usage_rate <= skip_rate:
         return 0.0
     if used_count >= min_usage_uses and usage_rate < weak_rate:
@@ -266,8 +297,8 @@ def _validation_adjusted_skill_weight(item: Dict[str, Any], weight: float) -> fl
         return weight
 
     quality = stats.get("validation_average_score", item.get("validation_quality", 0.5))
-    quality = max(0.0, min(1.0, _float_value(quality, 0.5)))
-    min_skip_uses = env_int("MIN_VALIDATION_USES_TO_SKIP_SKILL", 3)
+    quality = max(0.0, min(1.0, float(quality)))
+    min_skip_uses = MIN_VALIDATION_USES_TO_SKIP_SKILL
     if val_used >= min_skip_uses and quality <= 0.05:
         return 0.0
     weight *= 0.65 + quality
@@ -291,7 +322,7 @@ def _action_skill_weight(item: Dict[str, Any], weight: float) -> float:
     stats = _stats_of(item)
     support_counts = _support_counts_of(item)
     success_support = int(support_counts.get("success", 0) or 0)
-    min_action_support = env_int("ACTION_SKILL_MIN_SUCCESS_SUPPORT", 2)
+    min_action_support = ACTION_SKILL_MIN_SUCCESS_SUPPORT
     if (
         item.get("skill_type") == "action_skill"
         and success_support < min_action_support
@@ -300,9 +331,9 @@ def _action_skill_weight(item: Dict[str, Any], weight: float) -> float:
     ):
         return 0.0
     if item.get("skill_type") == "action_skill" and success_support < min_action_support:
-        weight *= env_float("SINGLETON_ACTION_SKILL_SELECTION_WEIGHT", 0.55)
+        weight *= SINGLETON_ACTION_SKILL_SELECTION_WEIGHT
 
-    confidence = _float_value(item.get("confidence"), 0.7)
+    confidence = float(item.get("confidence", 0.7))
     if confidence < 0.45:
         weight *= 0.45
     elif confidence < 0.60:
@@ -319,12 +350,12 @@ def _recovery_skill_weight(item: Dict[str, Any], weight: float) -> float:
     status = str(item.get("recovery_status") or "candidate_unverified")
     if status == "candidate_unverified":
         if item.get("pending_validation_revision"):
-            return weight * env_float("RECOVERY_PENDING_REVISION_SELECTION_WEIGHT", 0.9)
+            return weight * RECOVERY_PENDING_REVISION_SELECTION_WEIGHT
         if val_used > 0:
-            return weight * env_float("RECOVERY_CANDIDATE_WITH_FEEDBACK_SELECTION_WEIGHT", 0.35)
-        return weight * env_float("RECOVERY_CANDIDATE_SELECTION_WEIGHT", 0.25)
+            return weight * RECOVERY_CANDIDATE_WITH_FEEDBACK_SELECTION_WEIGHT
+        return weight * RECOVERY_CANDIDATE_SELECTION_WEIGHT
     if status == "validated":
-        return weight * env_float("RECOVERY_VALIDATED_SELECTION_WEIGHT", 1.15)
+        return weight * RECOVERY_VALIDATED_SELECTION_WEIGHT
     return weight
 
 
@@ -371,8 +402,8 @@ def _skill_has_poor_usage(item: Dict[str, Any]) -> bool:
     used_count, usage_rate = _skill_usage_rate(item)
     if usage_rate is None:
         return False
-    min_usage_uses = env_int("MIN_MEMORY_USES_TO_DOWNWEIGHT_SKILL", 4)
-    skip_rate = env_float("MEMORY_USAGE_SKIP_SUCCESS_RATE", 0.25)
+    min_usage_uses = MIN_MEMORY_USES_TO_DOWNWEIGHT_SKILL
+    skip_rate = MEMORY_USAGE_SKIP_SUCCESS_RATE
     return used_count >= min_usage_uses and usage_rate <= skip_rate
 
 
@@ -397,9 +428,9 @@ def _recovery_retry_gate(metadata: Dict[str, Any]) -> Tuple[bool, str]:
         and not metadata.get("pending_validation_revision")
     ):
         return True, ""
-    val_avg = _float_value(stats.get("validation_average_score", metadata.get("validation_quality", 0.0)), 0.0)
-    min_retry_uses = env_int("RECOVERY_CANDIDATE_RETRY_MIN_VALIDATION_USES", 1)
-    min_retry_avg = env_float("RECOVERY_CANDIDATE_RETRY_MIN_AVERAGE", 0.20)
+    val_avg = float(stats.get("validation_average_score", metadata.get("validation_quality", 0.0)))
+    min_retry_uses = RECOVERY_CANDIDATE_RETRY_MIN_VALIDATION_USES
+    min_retry_avg = RECOVERY_CANDIDATE_RETRY_MIN_AVERAGE
     if val_used >= min_retry_uses and val_avg < min_retry_avg:
         return False, "unverified_recovery_low_validation_without_revision"
     return True, ""
@@ -410,7 +441,7 @@ def _singleton_action_gate(metadata: Dict[str, Any]) -> Tuple[bool, str]:
     val_used = int(stats.get("validation_used_count", 0) or 0)
     support_counts = _support_counts_of(metadata)
     success_support = int(support_counts.get("success", 0) or 0)
-    min_action_support = env_int("ACTION_SKILL_MIN_SUCCESS_SUPPORT", 2)
+    min_action_support = ACTION_SKILL_MIN_SUCCESS_SUPPORT
     if (
         metadata.get("skill_type") == "action_skill"
         and success_support < min_action_support
@@ -426,9 +457,9 @@ def _failed_validation_gate(metadata: Dict[str, Any]) -> Tuple[bool, str]:
     val_used = int(stats.get("validation_used_count", 0) or 0)
     if not val_used:
         return True, ""
-    min_val_uses = env_int("MIN_VALIDATION_USES_TO_SKIP_SKILL", 3)
-    disable_avg = env_float("VALIDATION_SKIP_AVERAGE_THRESHOLD", 0.01)
-    disable_pass = env_float("VALIDATION_SKIP_PASS_THRESHOLD", 0.0)
+    min_val_uses = MIN_VALIDATION_USES_TO_SKIP_SKILL
+    disable_avg = VALIDATION_SKIP_AVERAGE_THRESHOLD
+    disable_pass = VALIDATION_SKIP_PASS_THRESHOLD
     val_avg, val_pass = _validation_scores(stats, metadata.get("validation_quality", 0.0))
     if val_used >= min_val_uses and val_avg <= disable_avg and val_pass <= disable_pass:
         return False, "failed_validation_history"
@@ -447,7 +478,7 @@ def _metadata_conflict_gate(
 
     if metadata_field_conflicts(query_fields, candidate_fields, "data_source"):
         return False, "data_source_mismatch"
-    allow_raw = env_float("MEMORY_SELECTION_MISMATCH_ALLOW_RAW_SCORE", 0.38)
+    allow_raw = MEMORY_SELECTION_MISMATCH_ALLOW_RAW_SCORE
     raw_score = float(skill.get("raw_score", 0.0) or 0.0)
     for field in ("task", "category", "prompt_category", "subtask"):
         query_values = query_fields.get(field)
@@ -465,8 +496,8 @@ def _metadata_conflict_gate(
 def _weak_one_off_skill(skill: Dict[str, Any], metadata: Dict[str, Any]) -> bool:
     score = float(skill.get("score", 0.0) or 0.0)
     raw_score = float(skill.get("raw_score", 0.0) or 0.0)
-    min_score = env_float("MEMORY_SELECTION_MIN_SKILL_SCORE", 0.06)
-    min_raw_score = env_float("MEMORY_SELECTION_MIN_RAW_SKILL_SCORE", 0.18)
+    min_score = MEMORY_SELECTION_MIN_SKILL_SCORE
+    min_raw_score = MEMORY_SELECTION_MIN_RAW_SKILL_SCORE
     support_counts = _support_counts_of(metadata)
     support_total = int(support_counts.get("success", 0) or 0) + int(support_counts.get("failure", 0) or 0)
     return support_total <= 1 and score < min_score and raw_score < min_raw_score
@@ -548,7 +579,7 @@ def _is_actionable_failure_memory(
     if not _experience_metadata_matches_query(record, query_metadata_tags):
         return False
 
-    min_score = _env_float_or_default("FAILURE_ONLY_KEEP_MIN_SIMILARITY", 0.25)
+    min_score = FAILURE_ONLY_KEEP_MIN_SIMILARITY
     if score is not None and score < min_score:
         return False
 
@@ -565,7 +596,7 @@ def _is_actionable_failure_memory(
         or record.get("tool_sequence")
     )
     if search_only:
-        search_min_score = _env_float_or_default("SEARCH_FAILURE_ONLY_KEEP_MIN_SIMILARITY", 0.32)
+        search_min_score = SEARCH_FAILURE_ONLY_KEEP_MIN_SIMILARITY
         return (
             has_guardrail_fields
             and score is not None
@@ -600,12 +631,12 @@ def filter_experiences_for_inference(
                 candidates.append((exp_id, record, float(score) if score is not None else 0.0))
         if not candidates:
             return {}
-        max_items = env_int("MAX_FAILURE_ONLY_EXPERIENCE_ITEMS", 2)
+        max_items = MAX_FAILURE_ONLY_EXPERIENCE_ITEMS
         candidates.sort(key=lambda item: item[2], reverse=True)
         normalized = {exp_id: record for exp_id, record, _ in candidates[:max(1, max_items)]}
 
-    min_uses = env_int("MIN_FAILURE_EXPERIENCE_USES_TO_FILTER", 3)
-    min_rate = env_float("FAILURE_EXPERIENCE_MIN_SUCCESS_RATE", 0.30)
+    min_uses = MIN_FAILURE_EXPERIENCE_USES_TO_FILTER
+    min_rate = FAILURE_EXPERIENCE_MIN_SUCCESS_RATE
     filtered: ExperienceLibrary = {}
     for exp_id, record in normalized.items():
         if _experience_task_metadata_conflicts_query(record, query_metadata_tags):

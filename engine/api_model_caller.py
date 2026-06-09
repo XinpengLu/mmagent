@@ -11,7 +11,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from PIL import Image
 
-from utils.env import env_bool
 from utils.artifacts import save_trajectory
 from engine.api_caller import call_vision_api
 from engine.api_tool_handler import APIToolHandler
@@ -139,7 +138,7 @@ def _extract_reasoning_text(reasoning_details):
 
 def _build_tools_schema(enabled_tools: str = ""):
     enable_fc = os.environ.get("ENABLE_FUNCTION_CALLING", "true")
-    if not env_bool("ENABLE_FUNCTION_CALLING", True):
+    if enable_fc.lower() != "true":
         print(f"[Function Calling] Disabled (ENABLE_FUNCTION_CALLING={enable_fc})")
         return None
 
@@ -320,7 +319,7 @@ def _handle_model_action(action, data, node, tool_handler, global_turn_idx):
 def create_model_caller(args, sampling_params, save_dir=None):
     """Create the callable used by the greedy rollout loop."""
     tool_handler = APIToolHandler(args, save_dir)
-    tools_schema = _build_tools_schema(getattr(args, "enabled_tools", ""))
+    tools_schema = _build_tools_schema(args.enabled_tools)
     
     def model_caller(node: AgentState):
         try:
