@@ -43,8 +43,7 @@ Output JSON only:
     "what to revise and rerun if the repaired step is empty/noisy/inconsistent"
   ],
   "anti_pattern": "the failed step that should not be repeated",
-  "code_template": "",
-  "confidence": 0.55
+  "code_template": ""
 }}
 ```
 

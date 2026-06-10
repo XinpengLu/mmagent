@@ -282,7 +282,6 @@ def _update_recovery_skill_status(item: Dict[str, Any]) -> None:
         item["requires_validation"] = False
         item.pop("disabled", None)
         item.pop("disabled_reason", None)
-        item["selection_weight"] = round(max(float(item.get("selection_weight", 1.0) or 1.0), 0.65 + quality), 6)
     elif status == "rejected":
         item["recovery_status"] = "rejected"
         item["requires_validation"] = False
@@ -324,7 +323,6 @@ def _update_skill_validation_status(
     quality = float(stats.get("validation_average_score", 0.0) or 0.0)
     pass_rate = float(stats.get("validation_pass_rate", 0.0) or 0.0)
     item["validation_quality"] = round(quality, 6)
-    item["selection_weight"] = round(max(0.05, 0.65 + quality), 6)
 
     used = int(stats.get("validation_used_count", 0) or 0)
     weak_validation = _weak_validation(

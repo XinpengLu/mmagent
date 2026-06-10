@@ -162,51 +162,23 @@ def skill_name_token(tag: str) -> str:
     return "" if text in {"general", "unknown", "reasoning"} else text
 
 
-_MATCH_WEIGHTS = {
-    "data_source": 1.25,
-    "category": 1.25,
-    "task": 1.25,
-    "prompt_category": 1.20,
-    "subtask": 1.20,
-    "domain": 1.15,
-    "subdomain": 1.15,
-    "eval_focus": 1.15,
-}
-
-_MISMATCH_WEIGHTS = {
-    "data_source": 0.35,
-    "category": 0.25,
-    "task": 0.25,
-    "prompt_category": 0.25,
-    "subtask": 0.25,
-    "domain": 0.65,
-    "subdomain": 0.65,
-    "eval_focus": 0.65,
-}
+STRICT_METADATA_FIELDS = {"data_source", "category", "task", "prompt_category", "subtask"}
 
 
-def metadata_selection_weight(candidate_tags: Iterable[str], query_metadata_tags: Iterable[str] | None) -> float:
-    """Softly prefer skills from the same benchmark/task family."""
+def metadata_allows_selection(candidate_tags: Iterable[str], query_metadata_tags: Iterable[str] | None) -> bool:
+    """Reject clear cross-task metadata conflicts; otherwise leave similarity unchanged."""
     query_fields = metadata_fields(query_metadata_tags or [])
     if not query_fields:
-        return 1.0
+        return True
 
     candidate_fields = metadata_fields(candidate_tags or [])
     if not candidate_fields:
-        return 1.0
+        return True
 
-    weight = 1.0
-    for field, query_values in query_fields.items():
-        candidate_values = candidate_fields.get(field)
-        if not candidate_values:
-            continue
-        if candidate_values & query_values:
-            weight *= _MATCH_WEIGHTS.get(field, 1.05)
-            if field == "task" and len(candidate_values) > 1:
-                weight *= max(0.45, len(candidate_values) ** -0.5)
-        elif field in _MISMATCH_WEIGHTS:
-            weight *= _MISMATCH_WEIGHTS[field]
-    return max(0.05, min(weight, 2.0))
+    for field in STRICT_METADATA_FIELDS:
+        if metadata_field_conflicts(query_fields, candidate_fields, field):
+            return False
+    return True
 
 
 def load_memory_prompt(prompt_key: str = "memory_rerank") -> str:

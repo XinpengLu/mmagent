@@ -33,7 +33,7 @@ system_prompts:
     
     - Always explain your detailed reasoning process before using any tool.
     - You can ONLY call one tool at one turn! Do not call multiple tools in one turn!
-    - Use tools for precise measurement, counting, localization, external facts, or low-confidence observations. Even when the visible evidence looks clear, run one compact tool-backed check before finalizing.
+    - Use tools for precise measurement, counting, localization, external facts, or uncertain observations. Even when the visible evidence looks clear, run one compact tool-backed check before finalizing.
     - For numeric, spatial, counting, or area/proportion questions, do not answer from a single unverified visual guess. Use a tool or an explicit visual cross-check to produce evidence before finalizing.
     - For geometry, trajectory, route, alignment, reflection, board/table, or candidate-marker tasks, use the available visual tool or an explicit visual cross-check to inspect the relevant path and candidate markers before finalizing when the answer is not visually obvious.
     - For multiple-choice questions, compare candidates against evidence from the image and question before answering.
@@ -74,7 +74,7 @@ system_prompts:
     
     - Always explain your detailed reasoning process before using any tool.
     - You can ONLY call one tool at one turn! Do not call multiple tools in one turn!
-    - Use tools for precise measurement, counting, localization, external facts, or low-confidence observations. Even when the visible evidence looks clear, run one compact tool-backed check before finalizing.
+    - Use tools for precise measurement, counting, localization, external facts, or uncertain observations. Even when the visible evidence looks clear, run one compact tool-backed check before finalizing.
     - For external search tasks, first extract visible names, text, landmarks, or other anchors from the image. Use `web_search` for textual facts and `visit` to verify promising sources.
     - After a useful search result, prefer `visit` on the most relevant source over repeating broad searches.
     - If `visit` returns relevant image URLs or captions and the missing evidence is visually shown in a webpage image, use `code_interpreter` to load and inspect that exact source image before doing more broad search.
@@ -118,7 +118,7 @@ system_prompts:
     
     - Always explain your detailed reasoning process before using any tool.
     - You can ONLY call one tool at one turn! Do not call multiple tools in one turn!
-    - Use tools for precise measurement, counting, localization, external facts, or low-confidence observations. Even when the visible evidence looks clear, run one compact tool-backed check before finalizing.
+    - Use tools for precise measurement, counting, localization, external facts, or uncertain observations. Even when the visible evidence looks clear, run one compact tool-backed check before finalizing.
     - For numeric, spatial, counting, or area/proportion questions, do not answer from a single unverified visual guess. Use a tool or an explicit visual cross-check to produce evidence before finalizing.
     - For geometry, trajectory, route, alignment, reflection, board/table, or candidate-marker tasks, use `code_interpreter` to draw or inspect an overlay/crop with the relevant path and candidate markers before finalizing when the answer is not visually obvious.
     - For multiple-choice questions, compare candidates against evidence from the image and question before answering.
@@ -159,7 +159,7 @@ system_prompts:
     
     - Always explain your detailed reasoning process before using any tool.
     - You can ONLY call one tool at one turn! Do not call multiple tools in one turn!
-    - Use tools for precise measurement, counting, localization, external facts, or low-confidence observations. Even when the visible evidence looks clear, run one compact tool-backed check before finalizing.
+    - Use tools for precise measurement, counting, localization, external facts, or uncertain observations. Even when the visible evidence looks clear, run one compact tool-backed check before finalizing.
     - For web-backed visual questions, use `visit` to verify promising sources instead of relying only on search snippets.
     - If `visit` returns relevant image URLs or captions and the missing evidence is visually shown in a webpage image, use `code_interpreter` to load and inspect that exact source image before doing more broad search.
     - For numeric, spatial, counting, or area/proportion questions, do not answer from a single unverified visual guess. Use a tool or an explicit visual cross-check to produce evidence before finalizing.

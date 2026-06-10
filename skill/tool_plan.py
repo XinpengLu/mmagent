@@ -1,4 +1,4 @@
-﻿"""Prompt formatting for executable tool plans from selected memory."""
+"""Prompt formatting for executable tool plans from selected memory."""
 
 from __future__ import annotations
 
@@ -29,11 +29,9 @@ GUARDRAIL_TOOL_PLAN_MIN_SUCCESS_RATE = 0.70
 MIN_VALIDATION_USES_TO_GATE_RECOVERY_TOOL_PLAN = 3
 ACTION_SKILL_MIN_VALIDATION_AVERAGE = 0.12
 ACTION_SKILL_MIN_SUCCESS_SUPPORT = 2
-ACTION_SKILL_HIGH_CONFIDENCE = 0.68
 DIRECT_EXPERIENCE_MIN_VALIDATION_AVG = 0.12
 DIRECT_EXPERIENCE_MIN_VALIDATION_PASS = 0.25
 DIRECT_EXPERIENCE_TOOL_PLAN_MIN_SUPPORT = 2
-DIRECT_EXPERIENCE_TOOL_PLAN_MIN_CONFIDENCE = 0.72
 ACTION_TOOL_PLAN_MAX_EXPERIENCES = 3
 BAD_EXPERIENCE_MAX_VALIDATION_AVG = 0.01
 BAD_EXPERIENCE_MAX_VALIDATION_PASS = 0.0
@@ -124,7 +122,6 @@ def _action_skill_tool_plan_allowed(skill: Dict[str, Any]) -> bool:
     recovery_support = int(support.get("recovery", 0))
     success_prior_support = int(support.get("success_prior", 0))
     supervised_support = int(support.get("supervised_correction", 0))
-    confidence = float(metadata.get("confidence", 0.0))
 
     if metadata.get("skill_type") == "recovery_action_skill":
         return (
@@ -133,15 +130,7 @@ def _action_skill_tool_plan_allowed(skill: Dict[str, Any]) -> bool:
         )
 
     min_success_support = ACTION_SKILL_MIN_SUCCESS_SUPPORT
-    if success_support >= min_success_support and success_support >= failure_support:
-        return True
-
-    high_conf = ACTION_SKILL_HIGH_CONFIDENCE
-    return (
-        success_support > 0
-        and success_support >= failure_support
-        and confidence >= high_conf
-    )
+    return success_support >= min_success_support and success_support >= failure_support
 
 
 def _direct_experience_tool_plan_allowed(record: Dict[str, Any]) -> bool:
@@ -149,8 +138,7 @@ def _direct_experience_tool_plan_allowed(record: Dict[str, Any]) -> bool:
 
     Retrieved experiences are useful context, but a single unvalidated rollout
     should not become a mandatory executable plan. This gate keeps direct
-    experience plans for memories with validation feedback, repeated support, or
-    deliberately high confidence.
+    experience plans for memories with validation feedback or repeated support.
     """
     if record.get("kind") != "success":
         return False
@@ -177,32 +165,20 @@ def _direct_experience_tool_plan_allowed(record: Dict[str, Any]) -> bool:
         min_pass = DIRECT_EXPERIENCE_MIN_VALIDATION_PASS
         return val_avg >= min_avg or val_pass >= min_pass
 
-    support_count = int(stats.get("support_count", 1))
-    min_support = DIRECT_EXPERIENCE_TOOL_PLAN_MIN_SUPPORT
-    if support_count >= min_support:
-        return True
-
-    confidence = float(record.get("confidence", 0.0))
-    min_confidence = DIRECT_EXPERIENCE_TOOL_PLAN_MIN_CONFIDENCE
-    return confidence >= min_confidence and not stats.get("recovered_from_failure")
+    return int(stats.get("support_count", 1)) >= DIRECT_EXPERIENCE_TOOL_PLAN_MIN_SUPPORT
 
 
-def _record_quality_score(record: Dict[str, Any]) -> float:
+def _record_quality_rank_key(record: Dict[str, Any]) -> Tuple[Any, ...]:
     stats = _stats(record)
-    score = 0.0
     val_used, val_avg, val_pass = _validation_feedback(record, use_item_quality=False)
-    if val_used:
-        score += 2.0
-        score += val_avg
-        score += 0.5 * val_pass
-        score += min(val_used, 8) * 0.03
-    score += min(int(stats.get("support_count", 1)), 6) * 0.04
-    score += float(record.get("confidence", 0.0)) * 0.2
-    if stats.get("supervised_correction"):
-        score += 0.15
-    if stats.get("recovered_from_failure"):
-        score += 0.05
-    return score
+    return (
+        val_used > 0 and (val_avg > 0.0 or val_pass > 0.0),
+        bool(stats.get("supervised_correction")),
+        int(stats.get("support_count", 1) or 1) >= DIRECT_EXPERIENCE_TOOL_PLAN_MIN_SUPPORT,
+        val_avg,
+        val_pass,
+        bool(stats.get("recovered_from_failure")),
+    )
 
 
 def _select_action_experience_ids(exp_ids: List[str], normalized: Dict[str, Dict[str, Any]]) -> set:
@@ -210,7 +186,7 @@ def _select_action_experience_ids(exp_ids: List[str], normalized: Dict[str, Dict
     if max_ids <= 0:
         return set(exp_ids)
     unique = [exp_id for exp_id in dict.fromkeys(exp_ids) if exp_id in normalized]
-    ranked = sorted(unique, key=lambda exp_id: _record_quality_score(normalized[exp_id]), reverse=True)
+    ranked = sorted(unique, key=lambda exp_id: _record_quality_rank_key(normalized[exp_id]), reverse=True)
     protected = [
         exp_id for exp_id in unique
         if (normalized[exp_id].get("stats") or {}).get("supervised_correction")
@@ -297,10 +273,7 @@ def _record_recovery_blocked(record: Dict[str, Any]) -> bool:
 def _low_information_success(record: Dict[str, Any]) -> bool:
     return (
         record.get("kind") == "success"
-        and (
-            float(record.get("confidence", 0.0)) < 0.45
-            or _stats(record).get("low_information_success")
-        )
+        and _stats(record).get("low_information_success")
     )
 
 

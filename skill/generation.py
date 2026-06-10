@@ -49,7 +49,6 @@ _PREVIOUS_SKILL_METADATA_KEYS = (
     "stats",
     "needs_refine",
     "validation_quality",
-    "selection_weight",
     "disabled",
     "disabled_reason",
     "recovery_status",
@@ -78,7 +77,6 @@ RECOVERY_REJECT_MIN_VALIDATION_USES = 3
 RECOVERY_REJECT_AVERAGE_THRESHOLD = 0.01
 RECOVERY_REJECT_PASS_THRESHOLD = 0.0
 MIN_VALIDATION_USES_TO_DEMOTE_RECOVERY_SKILL = 2
-RECOVERY_PENDING_REVISION_SELECTION_WEIGHT = 0.9
 ACTIONABLE_SUCCESS_MIN_EVIDENCE_SUCCESSES = 2
 ACTIONABLE_SUCCESS_MIN_EVIDENCE_RATE = 0.50
 VALIDATION_PROBE_SKILL_EXTRA_CLUSTERS = 8
@@ -430,7 +428,6 @@ def _previous_validation_stats_by_overlap(
         for key in (
             "stats",
             "validation_quality",
-            "selection_weight",
             "disabled",
             "disabled_reason",
             "recovery_status",
@@ -478,14 +475,10 @@ def _apply_validation_status_to_metadata(metadata: Dict[str, Any]) -> None:
     used = int(stats.get("validation_used_count", 0) or 0)
     if used <= 0:
         return
-    try:
-        quality = float(stats.get("validation_average_score", 0.0) or 0.0)
-        pass_rate = float(stats.get("validation_pass_rate", 0.0) or 0.0)
-    except (TypeError, ValueError):
-        quality, pass_rate = 0.0, 0.0
+    quality = float(stats.get("validation_average_score", 0.0) or 0.0)
+    pass_rate = float(stats.get("validation_pass_rate", 0.0) or 0.0)
 
     metadata["validation_quality"] = round(quality, 6)
-    metadata["selection_weight"] = round(max(0.05, 0.65 + quality), 6)
 
     if _validation_should_disable_skill(used, quality, pass_rate):
         metadata["disabled"] = True
@@ -561,7 +554,6 @@ def _reset_revised_recovery_validation(
     metadata.pop("validation_quality", None)
     metadata.pop("disabled", None)
     metadata.pop("disabled_reason", None)
-    metadata["selection_weight"] = RECOVERY_PENDING_REVISION_SELECTION_WEIGHT
 
 
 def _inherit_validation_feedback(
@@ -709,10 +701,7 @@ def _failure_guardrail_skill_content(skill_id: str, records: List[Dict[str, Any]
 
 def _cap_experience_count(experiences: ExperienceLibrary) -> ExperienceLibrary:
     """Keep recovery synthesis from growing the library past the configured cap."""
-    try:
-        limit = int(os.environ.get("EXPERIENCE_MAX_ITEMS", "0") or 0)
-    except (TypeError, ValueError):
-        limit = 0
+    limit = int(os.environ.get("EXPERIENCE_MAX_ITEMS", "0") or 0)
     if limit <= 0 or len(experiences) <= limit:
         return experiences
 
@@ -720,7 +709,7 @@ def _cap_experience_count(experiences: ExperienceLibrary) -> ExperienceLibrary:
         text = str(exp_id)
         return int(text[1:]) if text.startswith("E") and text[1:].isdigit() else 0
 
-    def _drop_priority(item: tuple[str, Dict[str, Any]]) -> tuple[int, int, float, int]:
+    def _prune_rank_key(item: tuple[str, Dict[str, Any]]) -> tuple[int, int, int]:
         exp_id, record = item
         stats = record.get("stats") if isinstance(record.get("stats"), dict) else {}
         validation_used = int(stats.get("validation_used_count", 0) or 0)
@@ -733,11 +722,10 @@ def _cap_experience_count(experiences: ExperienceLibrary) -> ExperienceLibrary:
             bucket = 1
         else:
             bucket = 2
-        confidence = float(record.get("confidence", 0.0) or 0.0)
-        return (bucket, validation_used, confidence, -_numeric_id(exp_id))
+        return (bucket, validation_used, -_numeric_id(exp_id))
 
     kept = dict(experiences)
-    for exp_id, _ in sorted(kept.items(), key=_drop_priority):
+    for exp_id, _ in sorted(kept.items(), key=_prune_rank_key):
         if len(kept) <= limit:
             break
         del kept[exp_id]
@@ -765,10 +753,7 @@ def _rollout_success_evidence(record: Dict[str, Any]) -> tuple[int, int]:
         if not isinstance(item, dict):
             continue
         total += 1
-        try:
-            score = float(item.get("accuracy_score", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            score = 0.0
+        score = float(item.get("accuracy_score", 0.0) or 0.0)
         if item.get("success") is True or score > 0.0:
             success += 1
     return success, total
@@ -778,8 +763,6 @@ def _is_actionable_success_record(record: Dict[str, Any]) -> bool:
     if record.get("kind") != "success":
         return False
     if experience_failed_validation(record):
-        return False
-    if float(record.get("confidence", 0.0) or 0.0) < 0.45:
         return False
     if (record.get("stats") or {}).get("low_information_success"):
         return False
@@ -834,15 +817,14 @@ def _cluster_validation_signal(cluster: Dict[str, Any]) -> tuple[int, float, flo
 def _cluster_rank_key(cluster: Dict[str, Any]) -> Tuple[Any, ...]:
     validation_used, validation_score, validation_pass = _cluster_validation_signal(cluster)
     success_count = sum(1 for _, record in cluster.get("items", []) or [] if record.get("kind") == "success")
+    has_positive_validation = validation_used > 0 and (validation_score > 0.0 or validation_pass > 0.0)
     return (
-        0 if success_count > 0 else 1,
-        -validation_score,
-        -validation_pass,
-        -min(validation_used, 8),
-        -success_count,
-        -_cluster_support_count(cluster),
-        -len(cluster["items"]),
-        str(cluster["signature"]),
+        success_count > 0,
+        has_positive_validation,
+        min(validation_used, 3),
+        success_count,
+        _cluster_support_count(cluster),
+        len(cluster["items"]),
     )
 
 
@@ -888,7 +870,8 @@ def _select_skill_clusters(
     ]
     normal_clusters = [cluster for cluster in eligible if not _is_extra_validation_probe_cluster(cluster, min_exps)]
     probe_clusters = [cluster for cluster in eligible if _is_extra_validation_probe_cluster(cluster, min_exps)]
-    normal_clusters.sort(key=_cluster_rank_key)
+    normal_clusters.sort(key=lambda cluster: str(cluster["signature"]))
+    normal_clusters.sort(key=_cluster_rank_key, reverse=True)
     probe_clusters.sort(key=lambda cluster: (-_cluster_validation_probe_count(cluster), str(cluster["signature"])))
     max_probe_clusters = VALIDATION_PROBE_SKILL_EXTRA_CLUSTERS
     return normal_clusters[:max_clusters] + probe_clusters[:max(0, max_probe_clusters)]
@@ -990,7 +973,6 @@ def _cluster_skill_metadata(
     signature_task_tags, signature_tool_tags = cluster.get("signature", ((), ()))
     task_tags = list(signature_task_tags) or sorted({tag for record in records for tag in record.get("task_tags", [])})
     tool_tags = list(signature_tool_tags) or sorted({tag for record in records for tag in record.get("tool_tags", [])})
-    confidence = round(sum(record.get("confidence", 0.5) for record in records) / max(1, len(records)), 3)
     skill_type = _cluster_skill_type(records, actionable_success_ids, recovery_candidate_ids)
 
     fallback_title = _title_from_tags(task_tags, tool_tags, skill_type)
@@ -1010,7 +992,6 @@ def _cluster_skill_metadata(
         "task_tags": task_tags,
         "tool_tags": tool_tags,
         "linked_experience_ids": linked_experience_ids,
-        "confidence": confidence,
         "support_counts": _metadata_support_counts(records, record_by_id, recovery_candidate_ids, source_success_ids),
         "skill_type": skill_type,
         "requires_tool_plan": skill_type in {"action_skill", "recovery_action_skill"},

@@ -12,23 +12,20 @@ from .index import load_skill_index, skill_index_path, skill_root
 from .filters import (
     allow_unvalidated_recovery_inference,
     recovery_has_train_support,
-    skill_selection_weight,
+    skill_allows_selection,
     skill_unvalidated_recovery,
 )
 from .utils import (
     callable_tools,
     cosine_scores,
+    metadata_allows_selection,
     metadata_fields,
-    metadata_selection_weight,
     tag_tokens,
     truncate_text,
 )
 
 
 VALIDATION_PROBE_EXTRA_SKILL_CANDIDATES = 3
-VALIDATION_PROBE_EXTRA_SKILL_SCORE = 0.12
-
-
 def _read_skill_content(item: Dict[str, Any]) -> str:
     path = item.get("path", "") if isinstance(item, dict) else ""
     if not path:
@@ -204,38 +201,29 @@ def _add_validation_probe_candidates(
         content = skill_contents.get(skill_id)
         if not content:
             continue
-        metadata_weight = metadata_selection_weight(item.get("task_tags", []), query_metadata_tags)
-        selection_weight = skill_selection_weight(item)
-        if selection_weight <= 0.0:
+        if not metadata_allows_selection(item.get("task_tags", []), query_metadata_tags):
+            continue
+        if not skill_allows_selection(item):
             continue
         probe_candidates.append((
-            metadata_weight * selection_weight,
             skill_id,
             item,
             content,
-            metadata_weight,
-            selection_weight,
         ))
 
-    probe_candidates.sort(key=lambda row: row[0], reverse=True)
-    probe_score = VALIDATION_PROBE_EXTRA_SKILL_SCORE
+    probe_candidates.sort(key=lambda row: row[0])
     added: List[str] = []
-    for _, skill_id, item, content, metadata_weight, selection_weight in probe_candidates[:max_probe_extras]:
+    for skill_id, item, content in probe_candidates[:max_probe_extras]:
         candidate_by_id[skill_id] = {
             "skill_id": skill_id,
-            "score": probe_score * max(0.20, min(1.5, metadata_weight)),
-            "raw_score": 0.0,
-            "selection_weight": selection_weight,
-            "metadata_weight": metadata_weight,
+            "score": 0.0,
             "metadata": item,
             "content": content,
             "matched_queries": [{
                 "query": query_text,
                 "type": f"{_recovery_probe_phase()}_recovery_probe_extra",
                 "rank": 0,
-                "score": probe_score,
-                "raw_score": 0.0,
-                "metadata_weight": metadata_weight,
+                "score": 0.0,
             }],
         }
         added.append(skill_id)
@@ -305,7 +293,6 @@ def _retriever_records(skill_texts: Dict[str, str], prefiltered_skills: Dict[str
             "skill_ids": [skill_id],
             "task_tags": list(item.get("task_tags", []) or []),
             "tool_tags": list(item.get("tool_tags", []) or []),
-            "confidence": float(item.get("confidence", 0.7) or 0.7),
             "content": text,
             "stats": {"support_count": 1, "used_count": 0, "success_after_used": 0, "failure_after_used": 0},
         }
@@ -355,7 +342,7 @@ def _rank_skill_matches(
     skills: Dict[str, Dict[str, Any]],
     query_metadata_tags: Iterable[str],
     min_similarity: float,
-) -> List[Tuple[str, float, float, float]]:
+) -> List[Tuple[str, float]]:
     skill_ids = list(retriever._experience_embeddings.keys())
     matrix = np.vstack([retriever._experience_embeddings[sid] for sid in skill_ids])
     scores = cosine_scores(query_embedding, matrix)
@@ -363,59 +350,50 @@ def _rank_skill_matches(
     for i in range(len(skill_ids)):
         skill_id = skill_ids[i]
         item = skills.get(skill_id, {})
-        base_weight = skill_selection_weight(item)
-        if float(scores[i]) < min_similarity or base_weight <= 0.0:
+        if float(scores[i]) < min_similarity or not skill_allows_selection(item):
             continue
-        metadata_weight = metadata_selection_weight(item.get("task_tags", []), query_metadata_tags)
-        ranked.append((skill_id, float(scores[i]), float(scores[i]) * base_weight * metadata_weight, metadata_weight))
-    ranked.sort(key=lambda item: item[2], reverse=True)
+        if not metadata_allows_selection(item.get("task_tags", []), query_metadata_tags):
+            continue
+        ranked.append((skill_id, float(scores[i])))
+    ranked.sort(key=lambda item: item[1], reverse=True)
     return ranked
 
 
-def _retrieval_detail(query_item: Dict[str, str], top_ranked: List[Tuple[str, float, float, float]]) -> Dict[str, Any]:
+def _retrieval_detail(query_item: Dict[str, str], top_ranked: List[Tuple[str, float]]) -> Dict[str, Any]:
     return {
         "query": query_item["query"],
         "type": query_item["type"],
-        "retrieved_skill_ids": [sid for sid, _, _, _ in top_ranked],
-        "scores": {sid: adjusted_score for sid, _, adjusted_score, _ in top_ranked},
-        "raw_scores": {sid: raw_score for sid, raw_score, _, _ in top_ranked},
-        "metadata_weights": {sid: metadata_weight for sid, _, _, metadata_weight in top_ranked},
+        "retrieved_skill_ids": [sid for sid, _ in top_ranked],
+        "scores": {sid: score for sid, score in top_ranked},
         "count": len(top_ranked),
     }
 
 
 def _merge_ranked_candidates(
     candidate_by_id: Dict[str, Dict[str, Any]],
-    top_ranked: List[Tuple[str, float, float, float]],
+    top_ranked: List[Tuple[str, float]],
     query_item: Dict[str, str],
     skills: Dict[str, Dict[str, Any]],
     skill_contents: Dict[str, str],
 ) -> None:
-    for rank, (skill_id, raw_score, score, metadata_weight) in enumerate(top_ranked, 1):
+    for rank, (skill_id, score) in enumerate(top_ranked, 1):
         item = skills[skill_id]
         entry = candidate_by_id.get(skill_id)
         if entry is None:
             entry = {
                 "skill_id": skill_id,
                 "score": score,
-                "raw_score": raw_score,
-                "selection_weight": skill_selection_weight(item),
-                "metadata_weight": metadata_weight,
                 "metadata": item,
                 "content": skill_contents[skill_id],
                 "matched_queries": [],
             }
             candidate_by_id[skill_id] = entry
         entry["score"] = max(float(entry.get("score", 0.0)), score)
-        entry["raw_score"] = max(float(entry.get("raw_score", 0.0)), raw_score)
-        entry["metadata_weight"] = max(float(entry.get("metadata_weight", 0.0)), metadata_weight)
         entry["matched_queries"].append({
             "query": query_item["query"],
             "type": query_item["type"],
             "rank": rank,
             "score": score,
-            "raw_score": raw_score,
-            "metadata_weight": metadata_weight,
         })
 
 

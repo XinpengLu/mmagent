@@ -1,4 +1,4 @@
-﻿"""Merge, reduce, prune, and refine canonical experience libraries."""
+"""Merge, reduce, prune, and refine canonical experience libraries."""
 
 from __future__ import annotations
 
@@ -633,32 +633,22 @@ def _reduce_experiences_to_limit(
     return normalize_experience_library(current)
 
 
-def _experience_prune_score(exp_id: str, record: Dict[str, Any]) -> float:
+def _experience_prune_rank_key(exp_id: str, record: Dict[str, Any]) -> Tuple[Any, ...]:
     if _is_reference_protected(record):
-        return float("inf")
+        return (1,)
     stats = record.get("stats") if isinstance(record.get("stats"), dict) else {}
-    score = 0.0
-    if record.get("kind") == "success":
-        score += 2.0
-    elif record.get("kind") == "failure":
-        score += 0.6
-    score += 0.6 if record.get("tool_sequence") else 0.0
-    score += 0.4 if record.get("validation_checks") else 0.0
-    score += 0.3 if record.get("fallback_plan") else 0.0
-    score += 0.6 * float(record.get("confidence", 0.0))
     val_used = int(stats.get("validation_used_count", 0) or 0)
-    if val_used:
-        score += float(stats.get("validation_average_score", 0.0))
-        score += 0.5 * float(stats.get("validation_pass_rate", 0.0))
-    if stats.get("low_information_success"):
-        score -= 1.0
-    if record.get("kind") == "failure" and not record.get("tool_sequence"):
-        score -= 0.5
-    try:
-        score += min(0.05, 0.0001 * int(str(exp_id)[1:]))
-    except (TypeError, ValueError):
-        pass
-    return score
+    validation_avg = float(stats.get("validation_average_score", 0.0) or 0.0)
+    validation_pass = float(stats.get("validation_pass_rate", 0.0) or 0.0)
+    return (
+        0,
+        not stats.get("low_information_success"),
+        record.get("kind") == "success",
+        bool(record.get("tool_sequence")),
+        val_used > 0 and (validation_avg > 0.0 or validation_pass > 0.0),
+        bool(record.get("validation_checks") or record.get("fallback_plan")),
+        _experience_sort_key(exp_id),
+    )
 
 
 def _prune_experiences_to_limit(experiences: Dict[str, Any], limit: int) -> ExperienceLibrary:
@@ -667,7 +657,7 @@ def _prune_experiences_to_limit(experiences: Dict[str, Any], limit: int) -> Expe
         return current
 
     removable = [
-        (exp_id, _experience_prune_score(exp_id, record))
+        (exp_id, _experience_prune_rank_key(exp_id, record))
         for exp_id, record in current.items()
         if not _is_reference_protected(record)
     ]

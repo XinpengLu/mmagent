@@ -11,12 +11,19 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from utils.artifacts import SAMPLE_SUMMARY_FILENAME, read_json
-from .base import _EmbeddingRecord, PALETTE, _fallback_task_label_from_id, _primary_task, _save_figure
-from .embedding_plots import (
-    _plot_experience_embedding_spaces,
-    _plot_memory_embedding_space,
-    _plot_skill_embedding_spaces,
+from .base import (
+    COLORS,
+    PALETTE,
+    apply_paper_style,
+    _EmbeddingRecord,
+    _clean_label,
+    _compact_legend,
+    _fallback_task_label_from_id,
+    _label_panel,
+    _primary_task,
+    _save_figure,
 )
+from .embedding_plots import _plot_memory_embedding_space
 
 
 def _load_memory_experiences(memory_root: Path) -> dict[str, dict[str, Any]]:
@@ -134,156 +141,122 @@ def _load_sample_outcomes(run_dir: Path, data_file: Path | None = None) -> list[
     return outcomes
 
 
-def _save_bar(
-    labels: list[str],
-    values_: list[float],
-    output_path: Path,
-    title: str,
-    ylabel: str,
-    color: str = "#0072B2",
-) -> Path:
-    fig, ax = plt.subplots(figsize=(max(4.2, 0.42 * len(labels)), 3.2))
-    ax.bar(labels, values_, color=color, edgecolor="white", linewidth=0.6)
-    ax.set_title(title)
-    ax.set_ylabel(ylabel)
-    ax.tick_params(axis="x", rotation=35)
-    ax.grid(axis="y", alpha=0.25, linewidth=0.6)
-    return _save_figure(fig, output_path)
+def _top_items(counter: Counter, max_items: int = 12) -> tuple[list[str], list[float]]:
+    items = counter.most_common(max_items)
+    return [item[0] for item in items][::-1], [float(item[1]) for item in items][::-1]
 
 
-def _save_stacked_bar(
-    labels: list[str],
-    stacks: dict[str, list[float]],
-    output_path: Path,
-    title: str,
-    ylabel: str,
-) -> Path:
-    fig, ax = plt.subplots(figsize=(max(4.4, 0.48 * len(labels)), 3.3))
-    bottom = np.zeros(len(labels))
-    for idx, (name, values_) in enumerate(stacks.items()):
-        ax.bar(
-            labels,
-            values_,
-            bottom=bottom,
-            label=name,
-            color=PALETTE[idx % len(PALETTE)],
+def _barh_counter(ax, counter: Counter, *, color: str, xlabel: str, max_items: int = 12) -> None:
+    labels, values = _top_items(counter, max_items)
+    ax.barh([_clean_label(label) for label in labels], values, color=color, edgecolor="white", linewidth=0.55)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("")
+    ax.grid(axis="x", alpha=0.2, linewidth=0.45)
+
+
+def _stacked_task_counts(
+    ax,
+    by_task: dict[str, Counter],
+    keys: list[str],
+    *,
+    xlabel: str,
+    max_items: int = 12,
+    show_legend: bool = True,
+) -> None:
+    totals = {task: sum(counter[key] for key in keys) for task, counter in by_task.items()}
+    tasks = [task for task, _ in sorted(totals.items(), key=lambda item: item[1], reverse=True)[:max_items]][::-1]
+    left = np.zeros(len(tasks))
+    colors = {"success": COLORS["success"], "failure": COLORS["failure"]}
+    for idx, key in enumerate(keys):
+        values = np.asarray([by_task[task][key] for task in tasks], dtype=float)
+        ax.barh(
+            [_clean_label(task) for task in tasks],
+            values,
+            left=left,
+            color=colors.get(key, PALETTE[idx % len(PALETTE)]),
             edgecolor="white",
-            linewidth=0.6,
+            linewidth=0.55,
+            label=_clean_label(key),
         )
-        bottom += np.asarray(values_)
-    ax.set_title(title)
-    ax.set_ylabel(ylabel)
-    ax.tick_params(axis="x", rotation=35)
-    ax.grid(axis="y", alpha=0.25, linewidth=0.6)
-    ax.legend(frameon=False, ncol=min(3, len(stacks)))
-    return _save_figure(fig, output_path)
+        left += values
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("")
+    ax.grid(axis="x", alpha=0.2, linewidth=0.45)
+    if show_legend:
+        _compact_legend(ax, ncol=min(2, len(keys)), loc="lower right")
 
 
-def _plot_experience_counts(experiences: dict[str, dict[str, Any]], output_dir: Path) -> list[Path]:
-    if not experiences:
-        return []
-    written: list[Path] = []
+def _plot_memory_artifact_overview(
+    experiences: dict[str, dict[str, Any]],
+    skills: dict[str, dict[str, Any]],
+    output_dir: Path,
+) -> Path | None:
+    if not experiences and not skills:
+        return None
+
+    apply_paper_style()
+    fig, axes = plt.subplots(2, 2, figsize=(7.6, 4.75), constrained_layout=True)
+
     kind_counts = Counter(str(record.get("kind", "unknown")) for record in experiences.values())
-    labels = sorted(kind_counts)
-    written.append(
-        _save_bar(
-            labels,
-            [kind_counts[label] for label in labels],
-            output_dir / "experience_kind_counts.pdf",
-            "Experience Outcomes",
-            "Number of experiences",
-            color="#0072B2",
-        )
-    )
+    _barh_counter(axes[0, 0], kind_counts, color=COLORS["experience"], xlabel="Experiences")
+    _label_panel(axes[0, 0], "A")
 
     by_task: dict[str, Counter] = defaultdict(Counter)
     for record in experiences.values():
-        task = _primary_task(record.get("task_tags"))
-        by_task[task][str(record.get("kind", "unknown"))] += 1
-    tasks = sorted(by_task)
-    kinds = sorted(kind_counts)
-    written.append(
-        _save_stacked_bar(
-            tasks,
-            {kind: [by_task[task][kind] for task in tasks] for kind in kinds},
-            output_dir / "experience_kind_by_task.pdf",
-            "Experience Outcomes by Task",
-            "Number of experiences",
-        )
-    )
-    return written
+        by_task[_primary_task(record.get("task_tags"))][str(record.get("kind", "unknown"))] += 1
+    _stacked_task_counts(axes[0, 1], by_task, sorted(kind_counts), xlabel="Experiences")
+    _label_panel(axes[0, 1], "B")
 
+    skill_type_counts = Counter(str(record.get("skill_type", "unknown")) for record in skills.values())
+    _barh_counter(axes[1, 0], skill_type_counts, color=COLORS["skill"], xlabel="Skills")
+    _label_panel(axes[1, 0], "C")
 
-def _plot_skill_counts(skills: dict[str, dict[str, Any]], output_dir: Path) -> list[Path]:
-    if not skills:
-        return []
-    written: list[Path] = []
-    type_counts = Counter(str(record.get("skill_type", "unknown")) for record in skills.values())
-    labels = sorted(type_counts)
-    written.append(
-        _save_bar(
-            labels,
-            [type_counts[label] for label in labels],
-            output_dir / "skill_type_counts.pdf",
-            "Skill Types",
-            "Number of skills",
-            color="#009E73",
-        )
-    )
-
-    by_task: dict[str, Counter] = defaultdict(Counter)
+    skill_by_task: dict[str, Counter] = defaultdict(Counter)
     for record in skills.values():
-        task = _primary_task(record.get("task_tags"))
-        by_task[task][str(record.get("skill_type", "unknown"))] += 1
-    tasks = sorted(by_task)
-    types = sorted(type_counts)
-    written.append(
-        _save_stacked_bar(
-            tasks,
-            {kind: [by_task[task][kind] for task in tasks] for kind in types},
-            output_dir / "skill_type_by_task.pdf",
-            "Skill Types by Task",
-            "Number of skills",
-        )
-    )
-    return written
+        skill_by_task[_primary_task(record.get("task_tags"))][str(record.get("skill_type", "unknown"))] += 1
+    _stacked_task_counts(axes[1, 1], skill_by_task, sorted(skill_type_counts), xlabel="Skills", show_legend=False)
+    _label_panel(axes[1, 1], "D")
+
+    return _save_figure(fig, output_dir / "memory_artifact_overview.pdf")
 
 
-def _plot_task_outcomes(outcomes: list[dict[str, Any]], output_dir: Path, prefix: str) -> list[Path]:
-    if not outcomes:
-        return []
-    written: list[Path] = []
-    by_task: dict[str, Counter] = defaultdict(Counter)
+def _plot_task_outcome_overview(
+    train_outcomes: list[dict[str, Any]],
+    val_outcomes: list[dict[str, Any]],
+    output_dir: Path,
+) -> Path | None:
+    if not train_outcomes and not val_outcomes:
+        return None
+
+    apply_paper_style()
+    fig, axes = plt.subplots(1, 3, figsize=(8.0, 2.65), constrained_layout=True)
+
+    for ax, outcomes, label in [(axes[0], train_outcomes, "Train"), (axes[1], val_outcomes, "Validation")]:
+        by_task: dict[str, Counter] = defaultdict(Counter)
+        for item in outcomes:
+            by_task[item["task"]]["success" if item["success"] else "failure"] += 1
+        _stacked_task_counts(ax, by_task, ["success", "failure"], xlabel=f"{label} Samples")
+
     avg_by_task: dict[str, list[float]] = defaultdict(list)
-    for item in outcomes:
-        task = item["task"]
-        by_task[task]["success" if item["success"] else "failure"] += 1
-        avg_by_task[task].append(float(item.get("average", 0.0) or 0.0))
-    tasks = sorted(by_task)
-    written.append(
-        _save_stacked_bar(
-            tasks,
-            {
-                "success": [by_task[task]["success"] for task in tasks],
-                "failure": [by_task[task]["failure"] for task in tasks],
-            },
-            output_dir / f"{prefix}_task_success_failure_counts.pdf",
-            f"{prefix.replace('_', ' ').title()} Task Outcomes",
-            "Number of samples",
-        )
+    for item in val_outcomes or train_outcomes:
+        avg_by_task[item["task"]].append(float(item.get("average", 0.0) or 0.0))
+    averages = {task: sum(values) / len(values) for task, values in avg_by_task.items()}
+    tasks = [task for task, _ in sorted(averages.items(), key=lambda item: item[1])[:12]]
+    axes[2].barh(
+        [_clean_label(task) for task in tasks],
+        [averages[task] for task in tasks],
+        color=COLORS["average"],
+        edgecolor="white",
+        linewidth=0.55,
     )
+    axes[2].set_xlim(0, 1.02)
+    axes[2].set_xlabel("Average@k")
+    axes[2].set_ylabel("")
+    axes[2].grid(axis="x", alpha=0.2, linewidth=0.45)
+    for ax, label in zip(axes, ["A", "B", "C"]):
+        _label_panel(ax, label)
 
-    averages = [sum(avg_by_task[task]) / len(avg_by_task[task]) for task in tasks]
-    fig, ax = plt.subplots(figsize=(max(4.4, 0.48 * len(tasks)), 3.3))
-    ax.bar(tasks, averages, color="#0072B2", edgecolor="white", linewidth=0.6)
-    ax.set_title(f"{prefix.replace('_', ' ').title()} Average Score by Task")
-    ax.set_ylabel("mean sample average@k")
-    ax.set_ylim(0, 1.02)
-    ax.tick_params(axis="x", rotation=35)
-    ax.grid(axis="y", alpha=0.25, linewidth=0.6)
-    path = output_dir / f"{prefix}_task_average_scores.pdf"
-    written.append(_save_figure(fig, path))
-    return written
+    return _save_figure(fig, output_dir / "task_outcome_overview.pdf")
 
 
 def _infer_run_base(run_root: Path) -> Path:
@@ -301,40 +274,6 @@ def _fixed_split_root(benchmark: str) -> Path:
             "Run benchmark/build_benchmark_subset.py before generating analysis figures."
         )
     return split_root
-
-
-def _build_memory_artifact_plots(figures_dir: Path, run_root: Path, seed: int = 42) -> list[Path]:
-    """Generate memory-distribution and embedding PDFs when memory artifacts exist."""
-    run_base = _infer_run_base(run_root)
-    benchmark = run_root.name
-    memory_root = run_base / "memory" / benchmark
-    split_root = _fixed_split_root(benchmark)
-    written: list[Path] = []
-
-    experiences = _load_memory_experiences(memory_root)
-    skills = _load_memory_skills(memory_root)
-    if experiences:
-        written.extend(_plot_experience_counts(experiences, figures_dir))
-    if skills:
-        written.extend(_plot_skill_counts(skills, figures_dir))
-
-    experience_records = _collect_embedding_records(memory_root / "experiences", experiences, "experience")
-    skill_records = _collect_embedding_records(memory_root / "skill_index", skills, "skill")
-    written.extend(_plot_experience_embedding_spaces(experience_records, figures_dir, seed))
-    written.extend(_plot_skill_embedding_spaces(skill_records, figures_dir, seed))
-    written.extend(_plot_memory_embedding_space(experience_records, skill_records, figures_dir, seed))
-
-    train_dir = run_root / "train"
-    if train_dir.exists():
-        written.extend(_plot_task_outcomes(_load_sample_outcomes(train_dir, split_root / "train.json"), figures_dir, "train"))
-
-    best_stage = _best_validation_stage(run_root)
-    if best_stage is not None:
-        val_dir = run_root / "val" / f"val_stage_{best_stage}"
-        if not val_dir.exists():
-            val_dir = run_root / f"val_stage_{best_stage}"
-        written.extend(_plot_task_outcomes(_load_sample_outcomes(val_dir, split_root / "val.json"), figures_dir, f"val_stage_{best_stage}"))
-    return written
 
 
 def _best_validation_stage(run_root: Path) -> int | None:
@@ -359,3 +298,40 @@ def _best_validation_stage(run_root: Path) -> int | None:
                 best_value = value
                 best_stage = int(row.get("stage_index") or row.get("stage") or 0)
     return best_stage
+
+
+def _build_memory_artifact_plots(figures_dir: Path, run_root: Path, seed: int = 42) -> list[Path]:
+    """Generate compact memory-distribution and embedding PDFs when artifacts exist."""
+    run_base = _infer_run_base(run_root)
+    benchmark = run_root.name
+    memory_root = run_base / "memory" / benchmark
+    split_root = _fixed_split_root(benchmark)
+    written: list[Path] = []
+
+    experiences = _load_memory_experiences(memory_root)
+    skills = _load_memory_skills(memory_root)
+    for path in [_plot_memory_artifact_overview(experiences, skills, figures_dir)]:
+        if path is not None:
+            written.append(path)
+
+    experience_records = _collect_embedding_records(memory_root / "experiences", experiences, "experience")
+    skill_records = _collect_embedding_records(memory_root / "skill_index", skills, "skill")
+    written.extend(_plot_memory_embedding_space(experience_records, skill_records, figures_dir, seed))
+
+    train_outcomes = []
+    train_dir = run_root / "train"
+    if train_dir.exists():
+        train_outcomes = _load_sample_outcomes(train_dir, split_root / "train.json")
+
+    val_outcomes = []
+    best_stage = _best_validation_stage(run_root)
+    if best_stage is not None:
+        val_dir = run_root / "val" / f"val_stage_{best_stage}"
+        if not val_dir.exists():
+            val_dir = run_root / f"val_stage_{best_stage}"
+        val_outcomes = _load_sample_outcomes(val_dir, split_root / "val.json")
+
+    path = _plot_task_outcome_overview(train_outcomes, val_outcomes, figures_dir)
+    if path is not None:
+        written.append(path)
+    return written

@@ -122,24 +122,22 @@ def _short_code_template(code, max_lines=80, max_chars=6000):
     return "\n".join(lines)[:max_chars].rstrip()
 
 
-def _score_success_code(code, result_text="", call_index=0, total_calls=1):
-    """Prefer code that computes or validates an answer over display-only probes."""
+def _success_code_rank_key(code, result_text="", call_index=0, total_calls=1):
+    """Prefer reusable code calls using simple evidence gates."""
     text = str(code or "")
     lowered = text.lower()
     if not lowered.strip():
-        return -999.0
+        return (False,)
 
     non_empty_lines = [line for line in text.splitlines() if line.strip()]
-    score = min(len(non_empty_lines), 80) * 0.04
-    score += min(len(text), 5000) / 2500.0
-
-    total_calls = max(int(total_calls or 1), 1)
-    score += 0.6 * (call_index / max(total_calls - 1, 1))
-
     result_lower = str(result_text or "").lower()
-    if "traceback" in result_lower or "syntaxerror" in result_lower or "nameerror" in result_lower:
-        score -= 4.0
-    return score
+    has_error = any(token in result_lower for token in ("traceback", "syntaxerror", "nameerror"))
+    return (
+        not has_error,
+        bool(result_lower.strip()),
+        len(non_empty_lines) >= 3,
+        call_index == max(int(total_calls or 1), 1) - 1,
+    )
 
 
 def _select_best_success_code(records):
@@ -167,13 +165,13 @@ def _select_best_success_code(records):
         return None
     total = len(code_calls)
     for local_idx, call in enumerate(code_calls):
-        call["score"] = _score_success_code(
+        call["rank_key"] = _success_code_rank_key(
             call["code"],
             call.get("result", ""),
             call_index=local_idx,
             total_calls=total,
         )
-    return max(code_calls, key=lambda item: item["score"])
+    return max(code_calls, key=lambda item: item["rank_key"])
 
 
 def _best_success_rollout_code(successful_rollouts):
@@ -186,11 +184,14 @@ def _best_success_rollout_code(successful_rollouts):
         code_call = _select_best_success_code(records)
         if not code_call:
             continue
-        score = code_call.get("score", 0.0) + float(rollout.get("accuracy_score", 0.0) or 0.0)
-        if best_code_call is None or score > best_code_call.get("score", -999.0):
+        rank_key = (
+            float(rollout.get("accuracy_score", 0.0) or 0.0) == 1.0,
+            code_call.get("rank_key", (False,)),
+        )
+        if best_code_call is None or rank_key > best_code_call.get("rank_key", (False,)):
             best_rollout = rollout
             best_code_call = dict(code_call)
-            best_code_call["score"] = score
+            best_code_call["rank_key"] = rank_key
             best_records = records
 
     return best_rollout, best_code_call, best_records
@@ -266,7 +267,6 @@ def _auto_success_record(sample_info, tool_tags, tool_sequence, operation, sourc
             "If two tool-derived candidates disagree, choose the one supported by the clearer visible intermediate evidence.",
         ],
         "evidence_rollouts": source_rollouts,
-        "confidence": 0.78,
     }
     if code_template:
         experience["code_template"] = code_template
@@ -434,11 +434,6 @@ def _normalize_llm_experience_ops(raw_ops, question_id, sample_info, source, def
                 continue
             if all_rollouts_failed:
                 op["kind"] = "failure"
-                if op.get("confidence") is not None:
-                    try:
-                        op["confidence"] = min(float(op["confidence"]), 0.65)
-                    except (TypeError, ValueError):
-                        op["confidence"] = 0.6
 
         normalized = _normalize_experience_operation(op, default_kind=default_kind, source=source)
         if normalized:

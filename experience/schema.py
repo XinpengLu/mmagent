@@ -16,7 +16,6 @@ REQUIRED_RECORD_FIELDS = (
     "skill_ids",
     "task_tags",
     "tool_tags",
-    "confidence",
     "content",
     "stats",
 )
@@ -38,7 +37,6 @@ OPERATION_METADATA_KEYS = (
     "skill_ids",
     "task_tags",
     "tool_tags",
-    "confidence",
     "stats",
     "tool_sequence",
     "tool_plan",
@@ -145,14 +143,6 @@ def _normalize_kind(value: Any, default: str = "success") -> str:
     return kind if kind in VALID_KINDS else default
 
 
-def _as_float(value: Any, default: float = 0.5) -> float:
-    try:
-        score = float(value)
-    except (TypeError, ValueError):
-        return default
-    return max(0.0, min(1.0, score))
-
-
 def _clean_content_text(text: str) -> str:
     """Keep retrievable experience text free of duplicated structured metadata."""
     text = str(text or "").strip()
@@ -203,8 +193,6 @@ def _is_canonical_experience_record(value: Any) -> bool:
         return False
     if not isinstance(value.get("tool_tags"), list):
         return False
-    if not isinstance(value.get("confidence"), (int, float)):
-        return False
     if not isinstance(value.get("stats"), dict):
         return False
     return True
@@ -241,7 +229,7 @@ LOW_INFORMATION_SUCCESS_PATTERNS = [
 
 
 def mark_low_information_success(record: ExperienceRecord) -> ExperienceRecord:
-    """Down-weight generic success summaries that are not executable policies."""
+    """Mark generic success summaries so gates can keep them out of tool plans."""
     if not isinstance(record, dict) or get_experience_kind(record) != "success":
         return record
     content = get_experience_content(record).lower()
@@ -252,7 +240,6 @@ def mark_low_information_success(record: ExperienceRecord) -> ExperienceRecord:
     stats = dict(updated.get("stats") or {})
     stats["low_information_success"] = True
     updated["stats"] = stats
-    updated["confidence"] = min(_as_float(updated.get("confidence"), 0.7), 0.35)
     return updated
 
 
@@ -276,7 +263,6 @@ def normalize_experience_record(
 
     stats = data.get("stats") if isinstance(data.get("stats"), dict) else {}
     record_id = exp_id or str(data.get("id", ""))
-    confidence_default = 0.7 if kind == "success" else 0.6
     normalized_stats = {
         "support_count": int(stats.get("support_count", 1) or 1),
         "used_count": int(stats.get("used_count", 0) or 0),
@@ -296,7 +282,6 @@ def normalize_experience_record(
         "skill_ids": _as_list(data.get("skill_ids")),
         "task_tags": _as_list(data.get("task_tags")),
         "tool_tags": _as_list(data.get("tool_tags")),
-        "confidence": _as_float(data.get("confidence"), confidence_default),
         "content": content,
         "stats": normalized_stats,
     }
@@ -383,8 +368,6 @@ def _compact_experience_record(value: Any, exp_id: str = "") -> ExperienceRecord
     for key in ("task_tags", "tool_tags", "skill_ids"):
         if record.get(key):
             compact[key] = record[key]
-    if record.get("confidence") is not None:
-        compact["confidence"] = record["confidence"]
     if record.get("stats"):
         compact["stats"] = record["stats"]
     for key in (
@@ -448,7 +431,6 @@ def _normalize_experience_operation(
             "skill_ids": operation.get("skill_ids", []),
             "task_tags": operation.get("task_tags", []),
             "tool_tags": operation.get("tool_tags", []),
-            "confidence": operation.get("confidence"),
             "content": operation.get("content") or operation.get("experience") or operation.get("exp") or operation.get("text"),
             "stats": operation.get("stats", {}),
             "tool_sequence": operation.get("tool_sequence") or operation.get("tool_plan"),
@@ -621,7 +603,6 @@ def _merge_record_metadata(exp_id: str, records: Iterable[Any], content: str) ->
         "skill_ids": _merge_sorted_record_list(normalized, "skill_ids"),
         "task_tags": _merge_sorted_record_list(normalized, "task_tags"),
         "tool_tags": _merge_sorted_record_list(normalized, "tool_tags"),
-        "confidence": sum(record.get("confidence", 0.5) for record in normalized) / len(normalized),
         "content": content,
         "stats": _merge_record_stats(normalized, recovery),
         **sequence_fields,

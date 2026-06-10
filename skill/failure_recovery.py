@@ -36,19 +36,9 @@ _SYSTEM_FAILURE_TERMS = (
     "unauthorized",
     "token expired",
 )
-
-
 def _stats_of(record: Dict[str, Any]) -> Dict[str, Any]:
     stats = record.get("stats") if isinstance(record, dict) else {}
     return stats if isinstance(stats, dict) else {}
-
-
-def _bounded_confidence(value: Any, default: float = 0.55) -> float:
-    try:
-        confidence = float(value or default)
-    except (TypeError, ValueError):
-        confidence = default
-    return max(0.35, min(0.70, confidence))
 
 
 def _record_text(record: Dict[str, Any]) -> str:
@@ -172,14 +162,7 @@ def _select_success_candidates(
     ]
     if compatible_successes:
         successes = compatible_successes
-    ranked = sorted(
-        successes,
-        key=lambda item: (
-            _tag_overlap(failure, item[1]),
-            float(item[1].get("confidence", 0.5) or 0.5),
-        ),
-        reverse=True,
-    )
+    ranked = sorted(successes, key=lambda item: _tag_overlap(failure, item[1]), reverse=True)
     return ranked[:max(1, max_candidates)]
 
 
@@ -295,7 +278,6 @@ def _proposal_to_record(
         return None
     task_tags = _compact_recovery_task_tags(proposal, failure)
     tool_tags = sorted(set(_as_list(proposal.get("tool_tags"), 6) + (failure.get("tool_tags") or []) + (success.get("tool_tags") or [])))
-    confidence = _bounded_confidence(proposal.get("confidence"))
 
     return normalize_experience_record(
         recovery_id,
@@ -303,7 +285,6 @@ def _proposal_to_record(
             "kind": "success",
             "task_tags": task_tags,
             "tool_tags": tool_tags,
-            "confidence": confidence,
             "content": content,
             "tool_sequence": _normalize_tool_sequence(proposal.get("tool_sequence")) or success.get("tool_sequence") or [],
             "validation_checks": _as_list(proposal.get("validation_checks"), 6),

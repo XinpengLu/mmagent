@@ -169,13 +169,6 @@ def _parse_supervised_proposal(response: Optional[str]) -> Optional[dict]:
     return proposal if proposal.get("recoverable") is True else None
 
 
-def _bounded_supervised_confidence(value) -> float:
-    try:
-        return min(float(value or 0.55), 0.65)
-    except (TypeError, ValueError):
-        return 0.55
-
-
 def _supervised_proposal_to_operation(proposal: dict) -> dict:
     return {
         "option": "add",
@@ -188,7 +181,6 @@ def _supervised_proposal_to_operation(proposal: dict) -> dict:
         "fallback_plan": proposal.get("fallback_plan", []),
         "anti_pattern": proposal.get("anti_pattern", ""),
         "code_template": proposal.get("code_template", ""),
-        "confidence": _bounded_supervised_confidence(proposal.get("confidence")),
         "recovery_status": "candidate_unverified",
         "stats": {
             "support_count": 1,

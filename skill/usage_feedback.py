@@ -46,7 +46,6 @@ def update_memory_usage_after_sample(
         experiences = load_experiences(experience_library_path)
         selected_skill_ids = usage.get("selected_skill_ids", [])
         used_exp_ids = _action_memory_ids(usage)
-        similarity_scores = usage.get("similarity_scores", {})
         success = any(
             float(result.get("accuracy_score", 0.0) or 0.0) == 1.0
             for result in rollout_results
@@ -64,13 +63,6 @@ def update_memory_usage_after_sample(
             key = "success_after_used" if success else "failure_after_used"
             stats[key] = int(stats.get(key, 0) or 0) + 1
             record["stats"] = stats
-            conf = float(record.get("confidence", 0.5) or 0.5)
-            sim = float(similarity_scores.get(exp_id, 0.5))
-            if success:
-                conf = min(1.0, conf + 0.05 * sim)
-            else:
-                conf = max(0.0, conf - 0.1 * sim)
-            record["confidence"] = round(conf, 4)
             experiences[exp_id] = normalize_experience_record(exp_id, record)
 
         save_library(experience_library_path, experiences)

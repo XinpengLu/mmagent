@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.lines import Line2D
+from matplotlib.patches import Ellipse
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from sklearn.preprocessing import StandardScaler
 
-from .base import PALETTE, _EmbeddingRecord, _primary_task, _save_figure
+from .base import COLORS, PALETTE, apply_paper_style, _EmbeddingRecord, _clean_label, _compact_legend, _label_panel, _primary_task, _save_figure
 
 
 def _reduce_embeddings(records: list[_EmbeddingRecord], seed: int) -> np.ndarray:
@@ -31,25 +32,44 @@ def _reduce_embeddings(records: list[_EmbeddingRecord], seed: int) -> np.ndarray
     ).fit_transform(matrix)
 
 
-def _plot_embedding_space(
-    records: list[_EmbeddingRecord],
-    output_path: Path,
-    label_fn: Callable[[_EmbeddingRecord], str],
-    title: str,
-    seed: int,
-    marker_by_entity: bool = False,
-) -> Path | None:
-    if len(records) < 2:
-        return None
-    coords = _reduce_embeddings(records, seed)
-    labels = [label_fn(record) for record in records]
+def _cluster_ellipse(points: np.ndarray, color: str, ax) -> None:
+    if len(points) < 3:
+        return
+    cov = np.cov(points.T)
+    if not np.isfinite(cov).all():
+        return
+    vals, vecs = np.linalg.eigh(cov)
+    order = vals.argsort()[::-1]
+    vals, vecs = vals[order], vecs[:, order]
+    width, height = 2.35 * np.sqrt(np.maximum(vals, 1e-8))
+    angle = np.degrees(np.arctan2(vecs[1, 0], vecs[0, 0]))
+    ax.add_patch(
+        Ellipse(
+            points.mean(axis=0),
+            width=width,
+            height=height,
+            angle=angle,
+            facecolor=color,
+            edgecolor=color,
+            alpha=0.12,
+            linewidth=1.0,
+            zorder=0,
+        )
+    )
+
+
+def _label_by_task(record: _EmbeddingRecord) -> str:
+    return _primary_task(record.metadata.get("task_tags"))
+
+
+def _plot_embedding_panel(ax, records: list[_EmbeddingRecord], coords: np.ndarray, labels: list[str], *, marker_by_entity: bool) -> None:
     unique_labels = sorted(set(labels))
     color_map = {label: PALETTE[idx % len(PALETTE)] for idx, label in enumerate(unique_labels)}
     marker_map = {"experience": "o", "skill": "^"}
 
-    fig, ax = plt.subplots(figsize=(5.2, 4.0))
     for label in unique_labels:
         mask = np.array([item == label for item in labels])
+        _cluster_ellipse(coords[mask], color_map[label], ax)
         if marker_by_entity:
             for entity_type in sorted({record.entity_type for record in records}):
                 entity_mask = np.array([record.entity_type == entity_type for record in records])
@@ -58,70 +78,62 @@ def _plot_embedding_space(
                     ax.scatter(
                         coords[final_mask, 0],
                         coords[final_mask, 1],
-                        s=24,
+                        s=28,
                         marker=marker_map.get(entity_type, "o"),
                         color=color_map[label],
-                        alpha=0.82,
-                        linewidth=0.3,
+                        alpha=0.88,
+                        linewidth=0.35,
                         edgecolor="white",
-                        label=f"{label} / {entity_type}",
                     )
         else:
             ax.scatter(
                 coords[mask, 0],
                 coords[mask, 1],
-                s=24,
+                s=28,
                 color=color_map[label],
-                alpha=0.82,
-                linewidth=0.3,
+                alpha=0.88,
+                linewidth=0.35,
                 edgecolor="white",
-                label=label,
             )
-    ax.set_title(title)
-    ax.set_xlabel("t-SNE 1")
-    ax.set_ylabel("t-SNE 2")
-    ax.grid(alpha=0.18, linewidth=0.5)
-    if len(unique_labels) <= 12:
-        ax.legend(frameon=False, loc="best", ncol=1)
-    return _save_figure(fig, output_path)
+    ax.set_xlabel("Embedding 1")
+    ax.set_ylabel("Embedding 2")
+    ax.grid(alpha=0.18, linewidth=0.45)
+    if marker_by_entity:
+        handles = [
+            Line2D([0], [0], marker="o", color="none", markerfacecolor=COLORS["experience"], markeredgecolor="white", markersize=6, label="Experience"),
+            Line2D([0], [0], marker="^", color="none", markerfacecolor=COLORS["skill"], markeredgecolor="white", markersize=6, label="Skill"),
+        ]
+        ax.legend(handles=handles, frameon=False, loc="upper right", handlelength=1.0)
+    elif len(unique_labels) <= 8:
+        _compact_legend(ax, loc="best")
 
 
-def _plot_experience_embedding_spaces(
-    records: list[_EmbeddingRecord],
+def _plot_memory_embedding_overview(
+    experience_records: list[_EmbeddingRecord],
+    skill_records: list[_EmbeddingRecord],
     output_dir: Path,
     seed: int,
-) -> list[Path]:
-    paths = []
-    for path in [
-        _plot_embedding_space(
-            records,
-            output_dir / "experience_embedding_by_kind.pdf",
-            lambda record: str(record.metadata.get("kind", "unknown")),
-            "Experience Embedding Space by Outcome",
-            seed,
-        ),
-        _plot_embedding_space(
-            records,
-            output_dir / "experience_embedding_by_task.pdf",
-            lambda record: _primary_task(record.metadata.get("task_tags")),
-            "Experience Embedding Space by Task",
-            seed,
-        ),
-    ]:
-        if path is not None:
-            paths.append(path)
-    return paths
+) -> Path | None:
+    records = experience_records + skill_records
+    if len(records) < 2:
+        return None
 
+    coords = _reduce_embeddings(records, seed)
+    apply_paper_style()
+    fig, axes = plt.subplots(1, 2, figsize=(7.3, 2.9), constrained_layout=True)
 
-def _plot_skill_embedding_spaces(records: list[_EmbeddingRecord], output_dir: Path, seed: int) -> list[Path]:
-    path = _plot_embedding_space(
-        records,
-        output_dir / "skill_embedding_by_type.pdf",
-        lambda record: str(record.metadata.get("skill_type", "unknown")),
-        "Skill Embedding Space by Type",
-        seed,
-    )
-    return [path] if path is not None else []
+    outcome_labels = [
+        str(record.metadata.get("kind") or record.metadata.get("skill_type") or record.entity_type)
+        for record in records
+    ]
+    _plot_embedding_panel(axes[0], records, coords, outcome_labels, marker_by_entity=True)
+    _label_panel(axes[0], "A")
+
+    task_labels = [_label_by_task(record) for record in records]
+    _plot_embedding_panel(axes[1], records, coords, task_labels, marker_by_entity=True)
+    _label_panel(axes[1], "B")
+
+    return _save_figure(fig, output_dir / "memory_embedding_overview.pdf")
 
 
 def _plot_memory_embedding_space(
@@ -130,12 +142,5 @@ def _plot_memory_embedding_space(
     output_dir: Path,
     seed: int,
 ) -> list[Path]:
-    path = _plot_embedding_space(
-        experience_records + skill_records,
-        output_dir / "memory_embedding_by_entity.pdf",
-        lambda record: record.entity_type,
-        "Experience and Skill Embedding Space",
-        seed,
-        marker_by_entity=True,
-    )
+    path = _plot_memory_embedding_overview(experience_records, skill_records, output_dir, seed)
     return [path] if path is not None else []

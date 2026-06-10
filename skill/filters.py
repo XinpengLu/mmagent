@@ -20,8 +20,6 @@ from .utils import (
 TRAIN_SUPPORTED_RECOVERY_MIN_USES = 2
 TRAIN_SUPPORTED_RECOVERY_MIN_SUCCESS_RATE = 0.50
 ACTION_SKILL_MIN_SUCCESS_SUPPORT = 2
-SINGLETON_ACTION_SKILL_MIN_CONFIDENCE = 0.65
-SINGLETON_ACTION_SKILL_SELECTION_WEIGHT = 0.55
 
 MIN_VALIDATION_USES_TO_SKIP_RECOVERY_EXPERIENCE = 3
 MIN_VALIDATION_USES_TO_SKIP_FAILURE_EXPERIENCE = 1
@@ -41,21 +39,12 @@ MIN_VALIDATION_USES_TO_SKIP_SKILL = 3
 VALIDATION_SKIP_AVERAGE_THRESHOLD = 0.01
 VALIDATION_SKIP_PASS_THRESHOLD = 0.0
 
-MIN_MEMORY_USES_TO_DOWNWEIGHT_SKILL = 4
+MIN_MEMORY_USES_TO_SKIP_SKILL = 4
 MEMORY_USAGE_SKIP_SUCCESS_RATE = 0.25
-MEMORY_USAGE_WEAK_SUCCESS_RATE = 0.45
-MEMORY_USAGE_STRONG_SUCCESS_RATE = 0.65
 
-RECOVERY_PENDING_REVISION_SELECTION_WEIGHT = 0.9
-RECOVERY_CANDIDATE_WITH_FEEDBACK_SELECTION_WEIGHT = 0.35
-RECOVERY_CANDIDATE_SELECTION_WEIGHT = 0.25
-RECOVERY_VALIDATED_SELECTION_WEIGHT = 1.15
 RECOVERY_CANDIDATE_RETRY_MIN_VALIDATION_USES = 1
 RECOVERY_CANDIDATE_RETRY_MIN_AVERAGE = 0.20
 
-MEMORY_SELECTION_MISMATCH_ALLOW_RAW_SCORE = 0.38
-MEMORY_SELECTION_MIN_SKILL_SCORE = 0.06
-MEMORY_SELECTION_MIN_RAW_SKILL_SCORE = 0.18
 FAILURE_ONLY_KEEP_MIN_SIMILARITY = 0.25
 SEARCH_FAILURE_ONLY_KEEP_MIN_SIMILARITY = 0.32
 MAX_FAILURE_ONLY_EXPERIENCE_ITEMS = 2
@@ -74,13 +63,10 @@ def _support_counts_of(item: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _validation_scores(stats: Dict[str, Any], average_default: Any = 0.0) -> Tuple[float, float]:
-    try:
-        return (
-            float(stats.get("validation_average_score", average_default) or 0.0),
-            float(stats.get("validation_pass_rate", 0.0) or 0.0),
-        )
-    except (TypeError, ValueError):
-        return 0.0, 0.0
+    return (
+        float(stats.get("validation_average_score", average_default) or 0.0),
+        float(stats.get("validation_pass_rate", 0.0) or 0.0),
+    )
 
 
 def allow_unvalidated_recovery_inference() -> bool:
@@ -136,7 +122,7 @@ def _explicit_task_count(item: Dict[str, Any]) -> int:
 
 
 def _singleton_action_skill_allowed(item: Dict[str, Any]) -> bool:
-    """Allow one-off action skills only when they are narrow and confident."""
+    """Allow one-off action skills only when they are narrow."""
     if item.get("skill_type") != "action_skill":
         return True
     support_counts = _support_counts_of(item)
@@ -146,9 +132,7 @@ def _singleton_action_skill_allowed(item: Dict[str, Any]) -> bool:
         return True
     if _explicit_task_count(item) != 1:
         return False
-    confidence = float(item.get("confidence", 0.0))
-    min_conf = SINGLETON_ACTION_SKILL_MIN_CONFIDENCE
-    return confidence >= min_conf
+    return bool(item.get("tool_tags") or item.get("linked_experience_ids"))
 
 
 def experience_failed_validation(record: Dict[str, Any]) -> bool:
@@ -267,123 +251,11 @@ def _skill_hard_blocked(item: Dict[str, Any]) -> bool:
     )
 
 
-def _usage_adjusted_skill_weight(item: Dict[str, Any], weight: float) -> float:
-    stats = _stats_of(item)
-    used_count = int(stats.get("used_count", 0) or 0)
-    success_after_used = int(stats.get("success_after_used", 0) or 0)
-    failure_after_used = int(stats.get("failure_after_used", 0) or 0)
-    judged_uses = success_after_used + failure_after_used
-    if not (used_count and judged_uses):
-        return weight
-
-    usage_rate = success_after_used / max(1, judged_uses)
-    min_usage_uses = MIN_MEMORY_USES_TO_DOWNWEIGHT_SKILL
-    skip_rate = MEMORY_USAGE_SKIP_SUCCESS_RATE
-    weak_rate = MEMORY_USAGE_WEAK_SUCCESS_RATE
-    strong_rate = MEMORY_USAGE_STRONG_SUCCESS_RATE
-    if used_count >= min_usage_uses and usage_rate <= skip_rate:
-        return 0.0
-    if used_count >= min_usage_uses and usage_rate < weak_rate:
-        return weight * 0.35
-    if used_count >= min_usage_uses and usage_rate >= strong_rate:
-        return weight * 1.15
-    return weight
-
-
-def _validation_adjusted_skill_weight(item: Dict[str, Any], weight: float) -> float:
-    stats = _stats_of(item)
-    val_used = int(stats.get("validation_used_count", 0) or 0)
-    if not val_used:
-        return weight
-
-    quality = stats.get("validation_average_score", item.get("validation_quality", 0.5))
-    quality = max(0.0, min(1.0, float(quality)))
-    min_skip_uses = MIN_VALIDATION_USES_TO_SKIP_SKILL
-    if val_used >= min_skip_uses and quality <= 0.05:
-        return 0.0
-    weight *= 0.65 + quality
-    if quality <= 0.05:
-        weight *= 0.25 if val_used >= 1 else 0.55
-    return weight
-
-
-def _failure_guardrail_weight(item: Dict[str, Any], weight: float) -> float:
-    stats = _stats_of(item)
-    val_used = int(stats.get("validation_used_count", 0) or 0)
-    support_counts = _support_counts_of(item)
-    success_support = int(support_counts.get("success", 0) or 0)
-    failure_support = int(support_counts.get("failure", 0) or 0)
-    if val_used == 0 and success_support == 0 and failure_support <= 1:
-        return weight * 0.35
-    return weight * 0.75
-
-
-def _action_skill_weight(item: Dict[str, Any], weight: float) -> float:
-    stats = _stats_of(item)
-    support_counts = _support_counts_of(item)
-    success_support = int(support_counts.get("success", 0) or 0)
-    min_action_support = ACTION_SKILL_MIN_SUCCESS_SUPPORT
-    if (
-        item.get("skill_type") == "action_skill"
-        and success_support < min_action_support
-        and int(stats.get("validation_used_count", 0) or 0) == 0
-        and not _singleton_action_skill_allowed(item)
-    ):
-        return 0.0
-    if item.get("skill_type") == "action_skill" and success_support < min_action_support:
-        weight *= SINGLETON_ACTION_SKILL_SELECTION_WEIGHT
-
-    confidence = float(item.get("confidence", 0.7))
-    if confidence < 0.45:
-        weight *= 0.45
-    elif confidence < 0.60:
-        weight *= 0.75
-    return weight * 1.15
-
-
-def _recovery_skill_weight(item: Dict[str, Any], weight: float) -> float:
-    if item.get("skill_type") != "recovery_action_skill":
-        return weight
-
-    stats = _stats_of(item)
-    val_used = int(stats.get("validation_used_count", 0) or 0)
-    status = str(item.get("recovery_status") or "candidate_unverified")
-    if status == "candidate_unverified":
-        if item.get("pending_validation_revision"):
-            return weight * RECOVERY_PENDING_REVISION_SELECTION_WEIGHT
-        if val_used > 0:
-            return weight * RECOVERY_CANDIDATE_WITH_FEEDBACK_SELECTION_WEIGHT
-        return weight * RECOVERY_CANDIDATE_SELECTION_WEIGHT
-    if status == "validated":
-        return weight * RECOVERY_VALIDATED_SELECTION_WEIGHT
-    return weight
-
-
-def _type_adjusted_skill_weight(item: Dict[str, Any], weight: float) -> float:
-    if item.get("skill_type") == "failure_guardrail":
-        return _failure_guardrail_weight(item, weight)
-    weight = _action_skill_weight(item, weight)
-    return _recovery_skill_weight(item, weight)
-
-
-def skill_selection_weight(item: Dict[str, Any]) -> float:
-    """Convert validation feedback into a soft retrieval weight."""
+def skill_allows_selection(item: Dict[str, Any]) -> bool:
+    """Return whether a skill can enter embedding retrieval."""
     if not isinstance(item, dict):
-        return 1.0
-    if _skill_hard_blocked(item):
-        return 0.0
-
-    weight = float(item.get("selection_weight", 1.0) or 1.0)
-    weight = _usage_adjusted_skill_weight(item, weight)
-    if weight <= 0.0:
-        return 0.0
-    weight = _validation_adjusted_skill_weight(item, weight)
-    if weight <= 0.0:
-        return 0.0
-    weight = _type_adjusted_skill_weight(item, weight)
-    if item.get("needs_refine"):
-        weight *= 0.9
-    return max(0.0, weight)
+        return True
+    return not _skill_hard_blocked(item)
 
 
 def _skill_usage_rate(item: Dict[str, Any]) -> Tuple[int, Optional[float]]:
@@ -402,7 +274,7 @@ def _skill_has_poor_usage(item: Dict[str, Any]) -> bool:
     used_count, usage_rate = _skill_usage_rate(item)
     if usage_rate is None:
         return False
-    min_usage_uses = MIN_MEMORY_USES_TO_DOWNWEIGHT_SKILL
+    min_usage_uses = MIN_MEMORY_USES_TO_SKIP_SKILL
     skip_rate = MEMORY_USAGE_SKIP_SUCCESS_RATE
     return used_count >= min_usage_uses and usage_rate <= skip_rate
 
@@ -478,8 +350,6 @@ def _metadata_conflict_gate(
 
     if metadata_field_conflicts(query_fields, candidate_fields, "data_source"):
         return False, "data_source_mismatch"
-    allow_raw = MEMORY_SELECTION_MISMATCH_ALLOW_RAW_SCORE
-    raw_score = float(skill.get("raw_score", 0.0) or 0.0)
     for field in ("task", "category", "prompt_category", "subtask"):
         query_values = query_fields.get(field)
         candidate_values = candidate_fields.get(field)
@@ -488,19 +358,9 @@ def _metadata_conflict_gate(
         conflicts = metadata_field_conflicts(query_fields, candidate_fields, field)
         if field == "task" and conflicts:
             return False, "task_mismatch"
-        if conflicts and raw_score < allow_raw:
+        if conflicts:
             return False, f"{field}_mismatch"
     return True, ""
-
-
-def _weak_one_off_skill(skill: Dict[str, Any], metadata: Dict[str, Any]) -> bool:
-    score = float(skill.get("score", 0.0) or 0.0)
-    raw_score = float(skill.get("raw_score", 0.0) or 0.0)
-    min_score = MEMORY_SELECTION_MIN_SKILL_SCORE
-    min_raw_score = MEMORY_SELECTION_MIN_RAW_SKILL_SCORE
-    support_counts = _support_counts_of(metadata)
-    support_total = int(support_counts.get("success", 0) or 0) + int(support_counts.get("failure", 0) or 0)
-    return support_total <= 1 and score < min_score and raw_score < min_raw_score
 
 
 def selection_gate_allows_skill(
@@ -520,8 +380,6 @@ def selection_gate_allows_skill(
         if not allowed:
             return False, reason
 
-    if _weak_one_off_skill(skill, metadata):
-        return False, "weak_one_off_skill"
     return True, ""
 
 

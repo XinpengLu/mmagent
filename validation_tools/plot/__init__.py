@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from .memory_artifact_plots import _build_memory_artifact_plots
-from .summary_plots import _plot_diagnostics, _plot_efficiency, _plot_memory, _plot_performance
+from .summary_plots import _plot_efficiency, _plot_self_evolution_overview
 
 
 def build_all_plots(
@@ -16,11 +16,12 @@ def build_all_plots(
 ) -> List[Path]:
     """Generate all report figures and return the written PDF paths."""
     figures_dir.mkdir(parents=True, exist_ok=True)
+    for stale_file in figures_dir.glob("*"):
+        if stale_file.is_file():
+            stale_file.unlink()
     written = [
-        _plot_performance(figures_dir / "performance_curve.pdf", rows),
+        _plot_self_evolution_overview(figures_dir / "self_evolution_overview.pdf", rows),
         _plot_efficiency(figures_dir / "efficiency_tokens_runtime.pdf", rows),
-        _plot_memory(figures_dir / "memory_and_skill_usage.pdf", rows),
-        _plot_diagnostics(figures_dir / "validation_diagnostics.pdf", rows),
     ]
     if run_root is not None:
         written.extend(_build_memory_artifact_plots(figures_dir, run_root))

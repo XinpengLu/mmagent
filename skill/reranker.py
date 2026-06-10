@@ -76,8 +76,6 @@ def _experience_can_drive_action(record: Dict[str, Any]) -> bool:
         return False
     if (record.get("stats") or {}).get("low_information_success"):
         return False
-    if float(record.get("confidence", 0.0) or 0.0) < 0.40:
-        return False
     tools = {str(tool).strip() for tool in record.get("tool_tags", []) or []}
     return bool(record.get("tool_sequence")) and bool(tools - {"", "reasoning"})
 

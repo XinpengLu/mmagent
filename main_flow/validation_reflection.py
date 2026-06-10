@@ -169,8 +169,8 @@ def _candidate_samples(
     k: int,
     max_samples: int,
     min_average: float,
-) -> List[Tuple[float, Path, Dict[str, Any]]]:
-    rows: List[Tuple[float, Path, Dict[str, Any]]] = []
+) -> List[Tuple[Tuple[bool, float], Path, Dict[str, Any]]]:
+    rows: List[Tuple[Tuple[bool, float], Path, Dict[str, Any]]] = []
     for sample_dir in metrics_dir.iterdir() if metrics_dir.exists() else []:
         if not sample_dir.is_dir():
             continue
@@ -180,8 +180,8 @@ def _candidate_samples(
         pass_k, avg_k = sample_metric(sample_dir, k)
         if pass_k > 0 and avg_k >= min_average:
             continue
-        priority = (1.0 - float(avg_k or 0.0)) + (1.0 if pass_k <= 0 else 0.0)
-        rows.append((priority, sample_dir, sample))
+        reflection_need = (pass_k <= 0, -float(avg_k or 0.0))
+        rows.append((reflection_need, sample_dir, sample))
     rows.sort(key=lambda item: item[0], reverse=True)
     return rows[: max(0, max_samples)]
 
@@ -202,10 +202,10 @@ def _finish_reflection(output_json: Path, result: Dict[str, Any]) -> None:
 
 
 def _pending_reflection_samples(
-    candidates: List[Tuple[float, Path, Dict[str, Any]]],
+    candidates: List[Tuple[Tuple[bool, float], Path, Dict[str, Any]]],
     reflected_samples: set[str],
     result: Dict[str, Any],
-) -> List[Tuple[float, Path, Dict[str, Any]]]:
+) -> List[Tuple[Tuple[bool, float], Path, Dict[str, Any]]]:
     pending = []
     for candidate in candidates:
         _, sample_dir, _ = candidate

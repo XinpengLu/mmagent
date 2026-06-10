@@ -446,7 +446,7 @@ def reload_experiences(args, base_system_prompt, experience_retriever=None):
     return base_system_prompt
 
 
-def _direct_tool_plan_score(exp_id: str, record: Dict[str, Any], similarity_scores: Dict[str, float]) -> Optional[float]:
+def _direct_tool_plan_rank_key(exp_id: str, record: Dict[str, Any], similarity_scores: Dict[str, float]) -> Optional[Tuple[Any, ...]]:
     """Rank standalone executable experiences when no modular skill is selected."""
     if not isinstance(record, dict) or record.get("kind") != "success":
         return None
@@ -468,16 +468,17 @@ def _direct_tool_plan_score(exp_id: str, record: Dict[str, Any], similarity_scor
         return None
 
     stats = record.get("stats") if isinstance(record.get("stats"), dict) else {}
-    score = float(similarity_scores.get(exp_id, 0.0))
-    score += 0.30 * float(stats.get("validation_average_score", 0.0))
-    score += 0.15 * float(stats.get("validation_pass_rate", 0.0))
-    score += 0.02 * min(5, int(stats.get("support_count", 1)))
-    score += 0.05 * float(record.get("confidence", 0.0))
-    if stats.get("supervised_correction"):
-        score += 0.05
-    if stats.get("recovered_from_failure") or record.get("recovery_status"):
-        score += 0.02
-    return score
+    validation_used = int(stats.get("validation_used_count", 0) or 0)
+    validation_avg = float(stats.get("validation_average_score", 0.0) or 0.0)
+    validation_pass = float(stats.get("validation_pass_rate", 0.0) or 0.0)
+    support_count = int(stats.get("support_count", 1) or 1)
+    return (
+        validation_used > 0 and (validation_avg > 0.0 or validation_pass > 0.0),
+        bool(stats.get("supervised_correction")),
+        support_count >= 2,
+        float(similarity_scores.get(exp_id, 0.0) or 0.0),
+        support_count,
+    )
 
 
 def _select_direct_tool_plan_experiences(
@@ -491,9 +492,9 @@ def _select_direct_tool_plan_experiences(
     max_items = DIRECT_EXPERIENCE_TOOL_PLAN_MAX_EXPERIENCES
     scored = []
     for exp_id, record in experiences.items():
-        score = _direct_tool_plan_score(exp_id, record, similarity_scores)
-        if score is not None:
-            scored.append((score, exp_id, record))
+        rank_key = _direct_tool_plan_rank_key(exp_id, record, similarity_scores)
+        if rank_key is not None:
+            scored.append((rank_key, exp_id, record))
     scored.sort(key=lambda item: item[0], reverse=True)
     return {exp_id: record for _, exp_id, record in scored[:max(1, max_items)]}
 
