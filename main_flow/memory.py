@@ -142,6 +142,9 @@ def _print_retriever_stats(args, retriever: ExperienceRetriever) -> None:
 
 def initialize_experience_retriever(args):
     """Initialize the experience retriever used by sample-level memory retrieval."""
+    if not args.experience_library and not args.skill_library:
+        return None, None
+
     try:
         exps = load_experiences(args.experience_library)
     except Exception as e:

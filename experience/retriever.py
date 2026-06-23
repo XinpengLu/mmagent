@@ -12,6 +12,7 @@ import numpy as np
 import requests
 from sklearn.metrics.pairwise import cosine_similarity
 from utils.json_utils import parse_llm_json_list, parse_llm_json_object
+from utils.api_usage_logger import log_api_usage
 
 import logging
 logger = logging.getLogger(__name__)
@@ -45,7 +46,6 @@ from prompts.experience_retrieval_templates import (
 )
 from .schema import (
     format_experience_for_prompt,
-    get_experience_content,
     normalize_experience_library,
 )
 
@@ -164,7 +164,7 @@ class ExperienceRetriever:
     def _compute_library_hash(self) -> str:
         """Compute hash of text that is actually embedded."""
         sorted_exps = [
-            (exp_id, get_experience_content(record))
+            (exp_id, record["content"])
             for exp_id, record in sorted(self.experiences.items())
         ]
         content = json.dumps(sorted_exps, ensure_ascii=False, sort_keys=True)
@@ -254,11 +254,44 @@ class ExperienceRetriever:
                         timeout=self.embedding_settings.timeout,
                     )
                 response.raise_for_status()
-                return response.json()
+                data = response.json()
+                log_api_usage(
+                    source=prefix,
+                    model=self.embedding_model,
+                    endpoint=url,
+                    payload=payload,
+                    response_data={"usage": data.get("usage")},
+                    status_code=response.status_code,
+                    elapsed_seconds=response.elapsed.total_seconds(),
+                    success=True,
+                    attempt=attempt + 1,
+                )
+                return data
             except requests.exceptions.Timeout as e:
+                log_api_usage(
+                    source=prefix,
+                    model=self.embedding_model,
+                    endpoint=url,
+                    payload=payload,
+                    success=False,
+                    error="timeout",
+                    attempt=attempt + 1,
+                )
                 if not self._log_embedding_timeout(prefix, url, e, attempt, max_retries):
                     return None
             except requests.exceptions.RequestException as e:
+                response = getattr(e, "response", None)
+                log_api_usage(
+                    source=prefix,
+                    model=self.embedding_model,
+                    endpoint=url,
+                    payload=payload,
+                    status_code=getattr(response, "status_code", None),
+                    elapsed_seconds=getattr(getattr(response, "elapsed", None), "total_seconds", lambda: None)(),
+                    success=False,
+                    error=str(e),
+                    attempt=attempt + 1,
+                )
                 if not self._handle_embedding_request_error(prefix, url, e, attempt, max_retries):
                     return None
             except Exception as e:
@@ -421,7 +454,7 @@ class ExperienceRetriever:
         print("This may take a while for the first time...")
         
         exp_ids = list(self.experiences.keys())
-        exp_texts = [get_experience_content(self.experiences[exp_id]) for exp_id in exp_ids]
+        exp_texts = [self.experiences[exp_id]["content"] for exp_id in exp_ids]
         
         start_time = time.time()
         embeddings = self._generate_embeddings_batch(exp_texts)
@@ -464,7 +497,7 @@ class ExperienceRetriever:
             exp_ids_to_embed = new_exp_ids + updated_exp_ids
             if exp_ids_to_embed:
                 print(f"  Updating embeddings for {len(exp_ids_to_embed)} experiences ({len(new_exp_ids)} new, {len(updated_exp_ids)} updated)...")
-                exp_texts = [get_experience_content(self.experiences[exp_id]) for exp_id in exp_ids_to_embed]
+                exp_texts = [self.experiences[exp_id]["content"] for exp_id in exp_ids_to_embed]
                 embeddings = self._generate_embeddings_batch(exp_texts)
                 
                 for exp_id, emb in zip(exp_ids_to_embed, embeddings):
@@ -693,8 +726,6 @@ class ExperienceRetriever:
                 temperature=self.retrieval_settings.image_description_temperature,
                 top_p=self.retrieval_settings.top_p,
                 api_name="Experience API",
-                require_chat_completions=True,
-                return_placeholder_on_error=False,
             )
             return resp.strip() if resp else ""
         except Exception as e:
@@ -730,7 +761,6 @@ class ExperienceRetriever:
                         temperature=self.retrieval_settings.task_decomposition_temperature,
                         top_p=self.retrieval_settings.top_p,
                         api_name="Experience API",
-                        require_chat_completions=True
                     )
                 else:
                     response = self.llm_client.chat(
@@ -843,8 +873,6 @@ def _call_rewrite_llm(llm_client: Any, prompt: str, images: Optional[List[Any]])
             top_p=settings.top_p,
             system_prompt=EXPERIENCE_REWRITE_SYSTEM_PROMPT,
             api_name="Experience Rewrite API",
-            require_chat_completions=True,
-            return_placeholder_on_error=False,
         )
     return llm_client.chat(
         prompt,

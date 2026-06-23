@@ -17,7 +17,6 @@ from utils.json_utils import parse_llm_json
 from experience.schema import (
     ExperienceLibrary,
     format_experience_for_prompt,
-    get_experience_content,
     normalize_experience_library,
     normalize_experience_record,
 )
@@ -43,7 +42,7 @@ def _stats_of(record: Dict[str, Any]) -> Dict[str, Any]:
 
 def _record_text(record: Dict[str, Any]) -> str:
     parts = [
-        get_experience_content(record),
+        record["content"],
         str(record.get("anti_pattern") or ""),
         " ".join(record.get("validation_checks") or []),
         " ".join(record.get("fallback_plan") or []),
@@ -82,7 +81,7 @@ def _is_success_prior(record: Dict[str, Any]) -> bool:
     if record.get("kind") != "success":
         return False
     stats = _stats_of(record)
-    if stats.get("recovered_from_failure") or stats.get("low_information_success"):
+    if stats.get("recovered_from_failure"):
         return False
     return _has_recovery_evidence(record)
 
@@ -301,7 +300,6 @@ def _proposal_to_record(
                 "success_after_used": 0,
                 "failure_after_used": 0,
                 "recovered_from_failure": True,
-                "recovery_status": "candidate_unverified",
                 "source_failure_count": 1,
                 "success_prior_count": 1,
             },

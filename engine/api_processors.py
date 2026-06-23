@@ -16,7 +16,6 @@ from utils.artifacts import (
     save_trajectory,
 )
 from utils.transient import (
-    rollout_dir_has_transient_tool_failure,
     text_has_transient_api_failure,
     text_has_transient_tool_failure,
 )
@@ -514,10 +513,10 @@ def _api_usage_totals(node):
     return api_events, prompt_tokens, completion_tokens, total_tokens, api_elapsed
 
 
-def _update_result_runtime_metrics(result, final_node, sampling_params, runtime_seconds, trajectory_text):
+def _update_result_runtime_metrics(result, final_node, args, sampling_params, runtime_seconds, trajectory_text):
     api_transient_failure = bool(getattr(final_node, "api_transient_failure", False))
     if not api_transient_failure:
-        api_transient_failure = text_has_transient_api_failure(result.get("final_answer")) or text_has_transient_api_failure(trajectory_text)
+        api_transient_failure = text_has_transient_api_failure(result.get("final_answer"))
     tool_transient_failure = bool(getattr(final_node, "tool_transient_failure", False))
     if not tool_transient_failure:
         tool_transient_failure = text_has_transient_tool_failure(result.get("final_answer")) or text_has_transient_tool_failure(trajectory_text)
@@ -533,6 +532,7 @@ def _update_result_runtime_metrics(result, final_node, sampling_params, runtime_
         "api_transient_failure": api_transient_failure,
         "tool_transient_failure": tool_transient_failure,
         "failure_type": failure_type,
+        "reasoning_model_name": getattr(args, "model_name", None),
         "runtime_seconds": round(runtime_seconds, 4),
         "api_elapsed_seconds": round(api_elapsed, 4),
         "api_call_count": len(api_events),
@@ -607,7 +607,7 @@ def _process_single_sample_unified(sample, args, sampling_params, save_dir=None)
     runtime_seconds = time.time() - rollout_started_at
 
     result, trajectory_text = _evaluate_final_node(question_id, question_text, ground_truth, final_node)
-    _update_result_runtime_metrics(result, final_node, sampling_params, runtime_seconds, trajectory_text)
+    _update_result_runtime_metrics(result, final_node, args, sampling_params, runtime_seconds, trajectory_text)
 
     return result
 
@@ -629,15 +629,11 @@ def process_single_sample(sample, args, sampling_params, rollout_idx=None):
         final_result = _process_single_sample_unified(sample, args, sampling_params, save_dir=save_dir)
 
         if final_result:
-            tool_transient_failure = rollout_dir_has_transient_tool_failure(save_dir)
-            if tool_transient_failure:
-                final_result["tool_transient_failure"] = True
-                if not final_result.get("failure_type"):
-                    final_result["failure_type"] = "tool_transient_failure"
             metrics = {
                 "accuracy_score": final_result["accuracy_score"],
                 "trajectory_score": final_result.get("trajectory_score"),
                 "trajectory_analysis": final_result.get("trajectory_analysis"),
+                "reasoning_model_name": final_result.get("reasoning_model_name"),
                 "runtime_seconds": final_result.get("runtime_seconds"),
                 "api_elapsed_seconds": final_result.get("api_elapsed_seconds"),
                 "api_call_count": final_result.get("api_call_count"),

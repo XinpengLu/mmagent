@@ -10,7 +10,6 @@ from prompts.skill_injection_templates import (
 )
 from experience.schema import (
     ExperienceLibrary,
-    mark_low_information_success,
     normalize_experience_library,
 )
 from .filters import (
@@ -205,10 +204,7 @@ def _validation_failed_bad_threshold(validation_used: int, validation_avg: float
 
 
 def _normalized_experience_records(selected_experiences: ExperienceLibrary) -> Dict[str, Dict[str, Any]]:
-    return {
-        exp_id: mark_low_information_success(record)
-        for exp_id, record in normalize_experience_library(selected_experiences).items()
-    }
+    return normalize_experience_library(selected_experiences)
 
 
 def _selected_tool_plan_skill_ids(selected_skills: List[Dict[str, Any]]) -> Tuple[set, set, set]:
@@ -270,13 +266,6 @@ def _record_recovery_blocked(record: Dict[str, Any]) -> bool:
     )
 
 
-def _low_information_success(record: Dict[str, Any]) -> bool:
-    return (
-        record.get("kind") == "success"
-        and _stats(record).get("low_information_success")
-    )
-
-
 def _direct_success_policy_allowed(
     record: Dict[str, Any],
     selected_skills: List[Dict[str, Any]],
@@ -314,7 +303,7 @@ def _record_action_flags(
     should_drive_action = (exp_id in action_exp_ids and record.get("kind") == "success") or (
         exp_id in guardrail_exp_ids and has_direct_tool_policy
     ) or direct_success_policy
-    if _low_information_success(record) or experience_low_validation_quality(record):
+    if experience_low_validation_quality(record):
         should_drive_action = False
     include_supporting_checks = should_drive_action or (
         record.get("kind") == "failure" and exp_id in guardrail_exp_ids
@@ -514,4 +503,3 @@ def format_default_tool_plan_for_prompt() -> Tuple[str, List[str]]:
         steps="\n".join(steps),
     )
     return block.strip(), tools
-

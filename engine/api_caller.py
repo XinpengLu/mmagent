@@ -5,6 +5,7 @@ import time
 import random
 import json
 import requests
+from utils.api_usage_logger import log_api_usage
 
 NON_RETRYABLE_STATUS_CODES = {400, 401, 403, 404}
 API_TIMEOUT_SECONDS = 240
@@ -93,6 +94,31 @@ def _make_api_request(end_point: str, headers: dict, payload: dict, api_name: st
     except Exception as e:
         print(f"[{api_name}] Unexpected error: {e}")
         return None, "other"
+
+
+def _response_json(response):
+    if response is None:
+        return None
+    try:
+        return response.json()
+    except Exception:
+        return None
+
+
+def _log_reasoning_usage(api_name, model_name, end_point, payload, response, request_error, attempt):
+    response_data = _response_json(response)
+    log_api_usage(
+        source=api_name,
+        model=model_name,
+        endpoint=end_point,
+        payload=payload,
+        response_data=response_data,
+        status_code=getattr(response, "status_code", None),
+        elapsed_seconds=_response_elapsed_seconds(response),
+        success=bool(response is not None and response.status_code == 200 and not request_error),
+        error=request_error,
+        attempt=attempt + 1,
+    )
 
 
 def _retry_wait(attempt: int) -> float:
@@ -275,6 +301,7 @@ def _try_single_api(api_key: str, end_point: str, model_name: str, messages: lis
     
     for attempt in range(max_retries):
         response, request_error = _make_api_request(end_point, headers, payload, api_name)
+        _log_reasoning_usage(api_name, model_name, end_point, payload, response, request_error, attempt)
         if request_error:
             should_retry, last_error = _retry_after_request_error(api_name, request_error, attempt, max_retries)
             if should_retry:
@@ -299,33 +326,32 @@ def _try_single_api(api_key: str, end_point: str, model_name: str, messages: lis
     return None, last_error
 
 
-def _api_configs():
-    primary = {
+def _reasoning_api_config():
+    config = {
         "api_key": os.environ.get("REASONING_API_KEY"),
         "end_point": os.environ.get("REASONING_END_POINT"),
         "api_name": "Reasoning API",
     }
-    if not all([primary["api_key"], primary["end_point"]]):
+    if not all([config["api_key"], config["end_point"]]):
         raise ValueError("REASONING_API_KEY and REASONING_END_POINT must be set.")
-    return primary
+    return config
 
 
-def _call_primary_api(primary, model_name, messages, sampling_params, max_retries, tools):
-    print(f"[API] No fallback API configured, using primary API with {max_retries} retries")
+def _call_reasoning_api(config, model_name, messages, sampling_params, max_retries, tools):
     result, error_info = _try_single_api(
-        primary["api_key"],
-        primary["end_point"],
+        config["api_key"],
+        config["end_point"],
         model_name,
         messages,
         sampling_params,
         max_retries,
-        api_name=primary["api_name"],
+        api_name=config["api_name"],
         tools=tools,
     )
     if result is not None:
         return result
 
-    error_summary = f"Primary API failed after {max_retries} attempts"
+    error_summary = f"Reasoning API failed after {max_retries} attempts"
     if error_info:
         error_summary += f": {error_info}"
     print(f"[API] {error_summary}")
@@ -337,5 +363,5 @@ def call_vision_api(model_name: str, messages: list, sampling_params: dict, max_
     if max_retries is None:
         max_retries = API_MAX_RETRIES
     max_retries = _max_retry_count(max_retries)
-    primary = _api_configs()
-    return _call_primary_api(primary, model_name, messages, sampling_params, max_retries, tools)
+    config = _reasoning_api_config()
+    return _call_reasoning_api(config, model_name, messages, sampling_params, max_retries, tools)

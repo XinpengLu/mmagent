@@ -1,3 +1,4 @@
+name: mmagent
 mode: train_val
 
 benchmarks:
@@ -6,10 +7,14 @@ benchmarks:
 paths:
   benchmark_processed: benchmark/processed
   benchmark_split: benchmark/split
-  output_root: output/full_benchmark
-  memory_root_base: memory_bank
   system_prompts: prompts/system_prompts.yaml
   tool_config: configs/tool_configs.yaml
+
+models:
+  reasoning_model_name: gpt-5.5
+  verifier_model_name: gpt-4o
+  experience_model_name: gpt-5.5
+  experience_embedding_model: text-embedding-3-small
 
 runtime:
   enable_function_calling: true

@@ -18,8 +18,6 @@ from prompts.skill_generation_templates import (
 from experience.schema import (
     ExperienceLibrary,
     format_experience_for_prompt,
-    get_experience_content,
-    mark_low_information_success,
     normalize_experience_library,
     normalize_experience_record,
 )
@@ -130,7 +128,7 @@ def _try_content_embeddings(records: List[Dict[str, Any]]) -> Optional[np.ndarra
             embedding_endpoint=endpoint,
             enable_cache=False,
         )
-        texts = [get_experience_content(record) for record in records]
+        texts = [record["content"] for record in records]
         embeddings = retriever._generate_embeddings_batch(texts, batch_size=max(1, len(texts)))
         valid = [emb for emb in embeddings if emb is not None]
         if len(valid) == len(records):
@@ -172,10 +170,7 @@ def _cluster_by_tags_and_content(
         if similarity_threshold is None
         else similarity_threshold
     )
-    normalized = {
-        exp_id: mark_low_information_success(record)
-        for exp_id, record in normalize_experience_library(experiences).items()
-    }
+    normalized = normalize_experience_library(experiences)
     items = sorted(normalized.items(), key=lambda x: _exp_sort_key(x[0]))
     if not items:
         return []
@@ -763,8 +758,6 @@ def _is_actionable_success_record(record: Dict[str, Any]) -> bool:
     if record.get("kind") != "success":
         return False
     if experience_failed_validation(record):
-        return False
-    if (record.get("stats") or {}).get("low_information_success"):
         return False
 
     stats = record.get("stats") if isinstance(record.get("stats"), dict) else {}

@@ -19,6 +19,10 @@ BENCHMARK_PROMPT_TOOLS = {
     "AgentVista": SEARCH_PROMPT_TOOLS,
     "MMSearch-Plus": SEARCH_PROMPT_TOOLS,
     "MMBrowseComp": SEARCH_PROMPT_TOOLS,
+    "BrowseComp-V3": SEARCH_PROMPT_TOOLS,
+    "VisBrowse-Bench": SEARCH_PROMPT_TOOLS,
+    "Agentic-MME": SEARCH_PROMPT_TOOLS,
+    "VisualToolBench": DEFAULT_PROMPT_TOOLS,
 }
 
 

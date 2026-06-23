@@ -1,0 +1,32 @@
+mode: test
+
+benchmarks:
+  - VisBrowse-Bench
+
+paths:
+  benchmark_processed: benchmark/processed
+  benchmark_split: benchmark/split
+  system_prompts: baseline/prompts.yaml
+  tool_config: configs/tool_configs.yaml
+
+models:
+  reasoning_model_name: gpt-5.5
+  verifier_model_name: gpt-4o
+  experience_model_name: gpt-5.5
+  experience_embedding_model: text-embedding-3-small
+
+baseline:
+  name: with_tool
+  code_prompt: simple_tool_code
+  general_prompt: simple_tool_general
+  search_prompt: simple_tool_search
+  code_tools: code_interpreter
+  general_tools: web_search, visit, code_interpreter
+  search_tools: web_search, image_search, visit, code_interpreter
+  enable_function_calling: true
+
+runtime:
+  num_workers: 8
+
+rollout:
+  per_sample: 4

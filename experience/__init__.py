@@ -1,6 +1,6 @@
 """Experience memory generation, storage, retrieval, and schemas."""
 
-from .llm_client import ExperienceLLM
+from .experience_llm import ExperienceLLM
 from .library import batch_merge, refine_experience_library
 from .pipeline import generate_experience_for_sample
 from .retriever import ExperienceRetriever, rewrite_experiences_for_task

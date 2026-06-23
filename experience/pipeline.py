@@ -4,9 +4,9 @@ import json
 import os
 import re
 
-from .critique import intra_sample_experiences, supervised_correction_experiences
-from .llm_client import ExperienceLLM
-from .schema import _compact_experience_operation, _normalize_experience_operation
+from .experience_generation import experiences_from_rollouts, recovery_experience
+from .experience_llm import ExperienceLLM
+from .schema import _normalize_experience_operation
 from .trajectory_summary import summarize_rollouts
 from .utils import append_sample_metadata_tags, sample_metadata_tags
 from utils.artifacts import (
@@ -20,20 +20,12 @@ def _operation_kind(operation):
     """Return the explicit kind on an LLM-produced experience operation, if any."""
     if not isinstance(operation, dict):
         return None
-    payload = operation.get("experience")
-    if isinstance(payload, dict):
-        value = payload.get("kind") or payload.get("outcome")
-    else:
-        value = operation.get("kind") or operation.get("outcome")
+    value = operation.get("kind")
     return str(value).strip().lower() if value is not None else None
 
 
 def _operation_record(operation):
-    """Return the experience payload regardless of add/modify wrapper shape."""
-    if not isinstance(operation, dict):
-        return {}
-    payload = operation.get("experience")
-    return payload if isinstance(payload, dict) else operation
+    return operation if isinstance(operation, dict) else {}
 
 
 def _has_executable_success_record(record):
@@ -300,7 +292,7 @@ def _auto_success_experience_from_rollouts(question_id, sample_info, evidence_ro
         source_rollouts,
         code_template,
     )
-    return {"option": "add", "experience": experience}
+    return {"option": "add", **experience}
 
 
 def _initial_generation_result(question_id):
@@ -381,13 +373,10 @@ def _evidence_rollouts(question_id, sample_dir, sample_rollout_results, args):
 
 def _success_state(score_list):
     success_count = sum(1 for score in score_list if float(score) == 1.0)
-    total_rollouts = max(1, len(score_list))
     has_success = success_count > 0
-    reliable_success = success_count > (total_rollouts / 2)
     return {
         "has_success": has_success,
         "all_rollouts_failed": not has_success,
-        "default_kind": "success" if reliable_success else "failure",
     }
 
 
@@ -418,24 +407,23 @@ def _iter_raw_experience_ops(raw_ops):
     return []
 
 
-def _normalize_llm_experience_ops(raw_ops, question_id, sample_info, source, default_kind, has_success, all_rollouts_failed):
+def _normalize_llm_experience_ops(raw_ops, question_id, sample_info, source, has_success, all_rollouts_failed):
     norm_ops = []
     sample = sample_info.get("sample", {})
     for op in _iter_raw_experience_ops(raw_ops):
-        if isinstance(op, str):
-            op = {"experience": op}
-        elif isinstance(op, dict):
-            op["task_tags"] = append_sample_metadata_tags(op.get("task_tags") or [], sample)
-            if _operation_kind(op) == "success" and not has_success:
-                print(
-                    f"  [Experience] Dropping success memory for {question_id} "
-                    f"because no rollout was successful"
-                )
-                continue
-            if all_rollouts_failed:
-                op["kind"] = "failure"
+        if not isinstance(op, dict):
+            continue
+        op["task_tags"] = append_sample_metadata_tags(op.get("task_tags") or [], sample)
+        if _operation_kind(op) == "success" and not has_success:
+            print(
+                f"  [Experience] Dropping success memory for {question_id} "
+                f"because no rollout was successful"
+            )
+            continue
+        if all_rollouts_failed:
+            op["kind"] = "failure"
 
-        normalized = _normalize_experience_operation(op, default_kind=default_kind, source=source)
+        normalized = _normalize_experience_operation(op, source=source)
         if normalized:
             norm_ops.append(normalized)
     return norm_ops
@@ -458,7 +446,7 @@ def _add_auto_success_memory(norm_ops, question_id, sample_info, source, evidenc
         auto_success_op.get("task_tags") or [],
         sample_info.get("sample", {}),
     )
-    normalized = _normalize_experience_operation(auto_success_op, default_kind="success", source=source)
+    normalized = _normalize_experience_operation(auto_success_op, source=source)
     if normalized:
         norm_ops.append(normalized)
         print(
@@ -485,7 +473,7 @@ def _add_supervised_correction_ops(
     if not all_rollouts_failed or not str(ground_truth or "").strip():
         return
 
-    correction_ops = supervised_correction_experiences(
+    correction_ops = recovery_experience(
         question,
         ground_truth,
         summaries_only,
@@ -504,20 +492,13 @@ def _add_supervised_correction_ops(
         correction_op["task_tags"] = append_sample_metadata_tags(correction_op.get("task_tags") or [], sample)
         correction_op["source_failure_ids"] = failure_rollout_ids
         correction_op["recovery_source_ids"] = failure_rollout_ids
-        normalized = _normalize_experience_operation(correction_op, default_kind="success", source=source)
+        normalized = _normalize_experience_operation(correction_op, source=source)
         if normalized:
             norm_ops.append(normalized)
             print(
                 f"  [Experience] Added supervised recovery candidate for {question_id} "
                 "from failed training rollouts"
             )
-
-
-def _write_experience_items(sample_dir, norm_ops):
-    if not norm_ops:
-        return
-    with open(os.path.join(sample_dir, 'exp_items.json'), 'w', encoding='utf-8') as f:
-        json.dump([_compact_experience_operation(op) for op in norm_ops], f, ensure_ascii=False, indent=2)
 
 
 def _summarize_sample_trajectories(question_id, sample_dir, sample_rollout_results, args, llm, result):
@@ -552,7 +533,7 @@ def _generate_raw_experience_ops(
         merged_summaries, sample_rollout_results
     )
     used_experiences = _get_used_original_experiences(sample_dir)
-    raw_ops = intra_sample_experiences(
+    raw_ops = experiences_from_rollouts(
         question,
         ground_truth,
         summaries_only,
@@ -591,7 +572,6 @@ def _normalize_sample_experience_ops(
         question_id,
         sample_info,
         source,
-        success_state["default_kind"],
         success_state["has_success"],
         success_state["all_rollouts_failed"],
     )
@@ -654,7 +634,6 @@ def generate_experience_for_sample(sample_info, args):
             raw_context=raw_context,
         )
 
-        _write_experience_items(sample_dir, norm_ops)
         result['success'] = True
         result['experience_ops'] = norm_ops
 

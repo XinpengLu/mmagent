@@ -1,5 +1,3 @@
-"""Generate experience operations from rollout summaries."""
-
 from __future__ import annotations
 
 import time
@@ -10,33 +8,28 @@ from PIL import Image
 from prompts.experience_generation_templates import INTRA_SAMPLE_CRITIQUE, SUPERVISED_CORRECTION_PROMPT
 
 from utils.json_utils import parse_llm_json_list, parse_llm_json_object
-from .llm_client import ExperienceLLM
+from .experience_llm import ExperienceLLM
 from .schema import format_experience_for_prompt
 from .config import ExperienceGenerationSettings
-from .utils import _find_original_images, _write_debug_texts
+from .utils import find_original_images, write_debug_texts
 
 
-def _settings() -> ExperienceGenerationSettings:
+def settings() -> ExperienceGenerationSettings:
     return ExperienceGenerationSettings.from_runtime()
 
 
-def _format_question(question: str, system_prompt: Optional[str]) -> str:
-    parts = []
-    if isinstance(question, str) and question.strip():
-        parts.append(question.strip())
-    if isinstance(system_prompt, str) and system_prompt.strip():
-        parts.append(f"\n==== System prompt:\n{system_prompt.strip()}")
-    return "\n".join(parts) if parts else ""
+def format_question(question: str, system_prompt: str) -> str:
+    return f"{question.strip()}\n\n==== System prompt:\n{system_prompt.strip()} ===="
 
 
-def _format_summaries(summaries: Dict[str, str]) -> str:
+def format_summaries(summaries: Dict[str, str]) -> str:
     return "\n\n".join(
-        f"Trajectory {i + 1} (node {node_id}):\n{summary}"
-        for i, (node_id, summary) in enumerate(summaries.items())
+        f"Trajectory {i + 1}:\n{summary}"
+        for i, summary in enumerate(summaries.values())
     )
 
 
-def _format_used_experiences(used_experiences: Optional[Dict[str, str]]) -> str:
+def format_used_experiences(used_experiences: Optional[Dict[str, str]]) -> str:
     if not used_experiences:
         return "(No experiences were retrieved for this sample)"
     return "\n\n".join(
@@ -45,7 +38,7 @@ def _format_used_experiences(used_experiences: Optional[Dict[str, str]]) -> str:
     )
 
 
-def _chat_with_sample_images(
+def chat_with_sample_images(
     llm: ExperienceLLM,
     prompt: str,
     *,
@@ -53,20 +46,19 @@ def _chat_with_sample_images(
     max_tokens: int,
     temperature: Optional[float] = None,
 ) -> str:
-    question_images = _find_original_images(debug_dir)
+    question_images = find_original_images(debug_dir)
     if question_images:
         pil_images = [Image.open(path).convert("RGB") for path in question_images]
         return llm.chat_with_image(
             prompt=prompt,
-            image=pil_images[0] if len(pil_images) == 1 else pil_images,
+            image=pil_images,
             max_tokens=max_tokens,
             temperature=temperature,
-            return_placeholder_on_error=False,
         )
     return llm.chat(prompt, max_tokens=max_tokens, temperature=temperature)
 
 
-def _call_with_retries(
+def call_with_retries(
     label: str,
     llm: ExperienceLLM,
     prompt: str,
@@ -76,10 +68,10 @@ def _call_with_retries(
     temperature: Optional[float] = None,
     raise_on_final_failure: bool = True,
 ) -> Optional[str]:
-    max_retries = _settings().critique_retries
+    max_retries = settings().critique_retries
     for attempt in range(max_retries):
         try:
-            return _chat_with_sample_images(
+            return chat_with_sample_images(
                 llm,
                 prompt,
                 debug_dir=debug_dir,
@@ -90,21 +82,21 @@ def _call_with_retries(
             if attempt == max_retries - 1:
                 if raise_on_final_failure:
                     raise
-                print(f"  Warning: {label} failed: {exc}")
+                print(f"Warning: {label} failed: {exc}")
                 return None
-            print(f"  Warning: {label} failed (attempt {attempt + 1}/{max_retries}): {exc}, retrying...")
+            print(f"Warning: {label} failed (attempt {attempt + 1}/{max_retries}): {exc}, retrying...")
             time.sleep(2 ** attempt)
     return None
 
-
-def intra_sample_experiences(
+# Pipeline 1: Generate experience operations from rollout summaries.
+def experiences_from_rollouts(
     question: str,
     groundtruth: str,
     summaries: Dict[str, str],
     llm: ExperienceLLM,
     max_ops: int = 2,
     debug_dir: Optional[str] = None,
-    system_prompt: Optional[str] = None,
+    system_prompt: str = "",
     used_experiences: Optional[Dict[str, str]] = None,
 ) -> List[dict]:
     """Generate add/modify operations by comparing rollout summaries."""
@@ -113,25 +105,25 @@ def intra_sample_experiences(
 
     prompt = INTRA_SAMPLE_CRITIQUE.format(
         max_ops=max_ops,
-        question=_format_question(question, system_prompt),
-        summaries=_format_summaries(summaries),
-        experiences=_format_used_experiences(used_experiences),
+        question=format_question(question, system_prompt),
+        summaries=format_summaries(summaries),
+        experiences=format_used_experiences(used_experiences),
         groundtruth=groundtruth or "[REDACTED]",
     )
 
     start = time.time()
-    response = _call_with_retries(
+    response = call_with_retries(
         "Experience critique",
         llm,
         prompt,
         debug_dir=debug_dir,
-        max_tokens=_settings().critique_max_tokens,
+        max_tokens=settings().critique_max_tokens,
     )
     print(f"  [Timing] cross rollout critique generation: {time.time() - start:.1f}s")
     if response is None:
         raise RuntimeError("Failed to generate experiences after all retries")
 
-    _write_debug_texts(
+    write_debug_texts(
         debug_dir,
         {
             "exp_intra_prompt.txt": prompt,
@@ -145,22 +137,22 @@ def intra_sample_experiences(
         return []
 
 
-def _supervised_correction_prompt(
+def supervised_correction_prompt(
     question: str,
     groundtruth: str,
     summaries: Dict[str, str],
-    system_prompt: Optional[str],
+    system_prompt: str,
     used_experiences: Optional[Dict[str, str]],
 ) -> str:
     return SUPERVISED_CORRECTION_PROMPT.format(
-        question=_format_question(question, system_prompt),
-        summaries=_format_summaries(summaries),
+        question=format_question(question, system_prompt),
+        summaries=format_summaries(summaries),
         groundtruth=groundtruth,
-        experiences=_format_used_experiences(used_experiences),
+        experiences=format_used_experiences(used_experiences),
     )
 
 
-def _parse_supervised_proposal(response: Optional[str]) -> Optional[dict]:
+def parse_supervised_proposal(response: Optional[str]) -> Optional[dict]:
     try:
         proposal = parse_llm_json_object(response or "")
     except Exception as exc:
@@ -169,7 +161,7 @@ def _parse_supervised_proposal(response: Optional[str]) -> Optional[dict]:
     return proposal if proposal.get("recoverable") is True else None
 
 
-def _supervised_proposal_to_operation(proposal: dict) -> dict:
+def supervised_proposal_to_operation(proposal: dict) -> dict:
     return {
         "option": "add",
         "kind": "success",
@@ -189,30 +181,29 @@ def _supervised_proposal_to_operation(proposal: dict) -> dict:
             "failure_after_used": 0,
             "recovered_from_failure": True,
             "supervised_correction": True,
-            "recovery_status": "candidate_unverified",
         },
     }
 
-
-def supervised_correction_experiences(
+# Pipeline 2: Supervised failure recovery experience generation.
+def recovery_experience(
     question: str,
     groundtruth: str,
     summaries: Dict[str, str],
     llm: ExperienceLLM,
     *,
     debug_dir: Optional[str] = None,
-    system_prompt: Optional[str] = None,
+    system_prompt: str = "",
     used_experiences: Optional[Dict[str, str]] = None,
 ) -> List[dict]:
     """Use training labels to turn all-failed rollouts into one recovery candidate."""
     if not summaries or not str(groundtruth or "").strip():
         return []
 
-    prompt = _supervised_correction_prompt(
+    prompt = supervised_correction_prompt(
         question, groundtruth, summaries, system_prompt, used_experiences
     )
     start = time.time()
-    response = _call_with_retries(
+    response = call_with_retries(
         "supervised correction",
         llm,
         prompt,
@@ -221,9 +212,9 @@ def supervised_correction_experiences(
         temperature=0.2,
         raise_on_final_failure=False,
     )
-    print(f"  [Timing] supervised correction generation: {time.time() - start:.1f}s")
+    print(f"[Timing] supervised correction generation: {time.time() - start:.1f}s")
 
-    _write_debug_texts(
+    write_debug_texts(
         debug_dir,
         {
             "exp_supervised_correction_prompt.txt": prompt,
@@ -231,7 +222,7 @@ def supervised_correction_experiences(
         },
     )
 
-    proposal = _parse_supervised_proposal(response)
+    proposal = parse_supervised_proposal(response)
     if proposal is None:
         return []
-    return [_supervised_proposal_to_operation(proposal)]
+    return [supervised_proposal_to_operation(proposal)]

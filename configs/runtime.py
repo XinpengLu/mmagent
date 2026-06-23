@@ -31,7 +31,7 @@ REQUIRED_ENV_KEYS = (
     "EXPERIENCE_MAX_ITEMS",
 )
 
-RESERVED_CONFIG_KEYS = {"mode", "benchmarks", "paths"}
+RESERVED_CONFIG_KEYS = {"name", "mode", "benchmarks", "paths"}
 
 COMPAT_ENV_ALIASES = {
     "ROLLOUT_PER_SAMPLE": "ROLLOUTS_PER_SAMPLE",
@@ -97,6 +97,20 @@ def _resolve(root: Path, raw: Any, key: str) -> Path:
     return path if path.is_absolute() else root / path
 
 
+def _safe_path_name(value: Any) -> str:
+    text = str(value or "").strip()
+    return "".join(ch if ch.isalnum() or ch in {".", "-", "_"} else "_" for ch in text).strip("_") or "run"
+
+
+def _reasoning_model_name(payload: dict[str, Any], source: Path) -> str:
+    models = _require_mapping(payload, "models", source)
+    return str(models.get("reasoning_model_name") or "model")
+
+
+def _run_name(payload: dict[str, Any]) -> str:
+    return str(payload.get("name") or "mmagent")
+
+
 def _load_runtime_payload(config_path: Path) -> dict[str, Any]:
     if not config_path.exists():
         raise FileNotFoundError(f"Missing runtime config: {config_path}")
@@ -109,15 +123,14 @@ def _load_runtime_payload(config_path: Path) -> dict[str, Any]:
 
 def _load_runtime_paths(root: Path, payload: dict[str, Any], source: Path) -> RuntimePaths:
     paths = _require_mapping(payload, "paths", source)
-    output_root = _resolve(root, paths.get("output_root"), "output_root")
-    log_root = _resolve(root, paths["log_root"], "log_root") if paths.get("log_root") else output_root / "_logs"
+    run_root = root / "output" / _safe_path_name(_reasoning_model_name(payload, source)) / _safe_path_name(_run_name(payload))
     return RuntimePaths(
         data_root=root,
         bench_root=_resolve(root, paths.get("benchmark_processed"), "benchmark_processed"),
         split_root=_resolve(root, paths.get("benchmark_split"), "benchmark_split"),
-        output_root=output_root,
-        log_root=log_root,
-        memory_root_base=_resolve(root, paths.get("memory_root_base"), "memory_root_base"),
+        output_root=run_root,
+        log_root=run_root,
+        memory_root_base=run_root,
         system_prompts=_resolve(root, paths.get("system_prompts"), "system_prompts"),
         tool_config=_resolve(root, paths.get("tool_config"), "tool_config"),
     )
@@ -125,21 +138,15 @@ def _load_runtime_paths(root: Path, payload: dict[str, Any], source: Path) -> Ru
 
 def _load_api_env(env_file: Path) -> tuple[str, str, str]:
     api_key = os.environ.get("OPENAI_API_KEY", "")
-    base_url = (os.environ.get("OPENAI_BASE_URL") or os.environ.get("OPENAI_API_BASE") or "").rstrip("/")
-    chat_url = os.environ.get("OPENAI_CHAT_COMPLETIONS_URL", "").rstrip("/")
-    if base_url and not chat_url:
-        chat_url = f"{base_url}/chat/completions"
-        os.environ["OPENAI_CHAT_COMPLETIONS_URL"] = chat_url
-    if base_url:
-        os.environ["OPENAI_BASE_URL"] = base_url
-        os.environ["OPENAI_API_BASE"] = base_url
+    base_url = os.environ.get("OPENAI_BASE_URL", "").rstrip("/")
+    chat_url = f"{base_url}/chat/completions" if base_url else ""
     if not api_key:
         raise RuntimeError(f"OPENAI_API_KEY is not set. Put it in {env_file}.")
-    if not base_url or not chat_url:
-        raise ValueError(
-            "OPENAI_BASE_URL must be set in .env. "
-            "OPENAI_CHAT_COMPLETIONS_URL is optional and defaults to <OPENAI_BASE_URL>/chat/completions."
-        )
+    if not base_url:
+        raise ValueError("OPENAI_BASE_URL must be set in .env.")
+    os.environ["OPENAI_BASE_URL"] = base_url
+    os.environ["OPENAI_API_BASE"] = base_url
+    os.environ["OPENAI_CHAT_COMPLETIONS_URL"] = chat_url
     return api_key, base_url, chat_url
 
 
@@ -164,7 +171,7 @@ def _flatten_compat_env(settings: dict[str, Any]) -> dict[str, str]:
         env[env_key] = _env_value(value)
 
     for section, values in settings.items():
-        prefix = () if section == "runtime" else (section,)
+        prefix = () if section in {"runtime", "models"} else (section,)
         visit(prefix, values)
 
     for generated_name, legacy_name in COMPAT_ENV_ALIASES.items():
@@ -186,17 +193,16 @@ def _apply_run_root_override(root: Path, paths: RuntimePaths) -> RuntimePaths:
     if not (run_id or run_root_raw):
         return paths
 
-    run_id = run_id or "benchmark_run"
-    run_root = Path(run_root_raw) if run_root_raw else root / "output" / "repro_benchmark_runs" / run_id
+    run_id = _safe_path_name(run_id or "benchmark_run")
+    run_root = Path(run_root_raw) if run_root_raw else paths.output_root.parent / run_id
     run_root = run_root if run_root.is_absolute() else root / run_root
     os.environ["RUN_ID"] = run_id
     os.environ["RUN_ROOT"] = str(run_root)
-    os.environ["VALIDATION_SNAPSHOT_ROOT"] = str(run_root / "snapshots")
     return replace(
         paths,
-        output_root=run_root / "output",
-        log_root=run_root / "logs",
-        memory_root_base=run_root / "memory",
+        output_root=run_root,
+        log_root=run_root,
+        memory_root_base=run_root,
     )
 
 

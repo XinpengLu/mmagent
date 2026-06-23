@@ -272,6 +272,7 @@ def compute_dataset_summary(data, args):
         "memory_usage": _summarize_memory_usage(args.output_dir),
         "memory_bank": _summarize_memory_bank(args),
         "config": {
+            "reasoning_model_name": getattr(args, "model_name", None),
             "system_prompt_key": args.system_prompt_key,
             "memory_rerank_top_skills": args.memory_rerank_top_skills,
             "memory_rerank_top_experiences": args.memory_rerank_top_experiences,

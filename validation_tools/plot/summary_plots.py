@@ -29,7 +29,7 @@ def _stage_ticks(ax: Any, xs: list[int]) -> None:
         ax.set_xlim(xs[0] - 0.5, xs[0] + 0.5)
 
 
-def _finish_score_axis(ax: Any, xs: list[int], xlabel: str = "Step") -> None:
+def _finish_score_axis(ax: Any, xs: list[int], xlabel: str = "Stage") -> None:
     ax.set_xlabel(xlabel)
     ax.set_ylabel("Score")
     ax.set_ylim(0.0, 1.02)
@@ -55,7 +55,7 @@ def _plot_efficiency(path: Path, rows: List[Dict[str, Any]]) -> Path | None:
     ax.plot(xs, _values(rows, "runtime_seconds_mean"), marker="o", color=COLORS["runtime"], label="wall time")
     ax.plot(xs, _values(rows, "api_elapsed_seconds_mean"), marker="s", color=COLORS["train"], label="API time")
     _stage_ticks(ax, xs)
-    ax.set_xlabel("Step")
+    ax.set_xlabel("Stage")
     ax.set_ylabel("Seconds / Sample")
     _compact_legend(ax)
     _label_panel(ax, "A")
@@ -71,7 +71,7 @@ def _plot_efficiency(path: Path, rows: List[Dict[str, Any]]) -> Path | None:
     )
     ax.plot(xs, _values(rows, "api_total_tokens_mean"), color=COLORS["best"], marker="o", label="total")
     _stage_ticks(ax, xs)
-    ax.set_xlabel("Step")
+    ax.set_xlabel("Stage")
     ax.set_ylabel("Tokens / Sample")
     _compact_legend(ax)
     _label_panel(ax, "B")
@@ -81,7 +81,7 @@ def _plot_efficiency(path: Path, rows: List[Dict[str, Any]]) -> Path | None:
     ax.plot(xs, _values(rows, "tool_call_count_mean"), marker="s", color=COLORS["tool"], label="tool calls")
     ax.plot(xs, _values(rows, "api_call_count_mean"), marker="^", color=COLORS["neutral"], label="API calls")
     _stage_ticks(ax, xs)
-    ax.set_xlabel("Step")
+    ax.set_xlabel("Stage")
     ax.set_ylabel("Count / Sample")
     _compact_legend(ax)
     _label_panel(ax, "C")
@@ -95,8 +95,7 @@ def _plot_self_evolution_overview(path: Path, rows: List[Dict[str, Any]]) -> Pat
 
     plt = _plt()
     xs = _stages(rows)
-    fig, axes = plt.subplots(2, 2, figsize=(8.2, 5.0), constrained_layout=True)
-    axes = axes.ravel()
+    fig, axes = plt.subplots(1, 3, figsize=(9.2, 2.6), constrained_layout=True)
 
     ax = axes[0]
     train_average = _values(rows, "train_average_at_k")
@@ -123,7 +122,7 @@ def _plot_self_evolution_overview(path: Path, rows: List[Dict[str, Any]]) -> Pat
     )
     ax.plot(xs, _values(rows, "direct_tool_plan_ratio"), marker="D", color=COLORS["tool"], label="Direct Tool Plan")
     _stage_ticks(ax, xs)
-    ax.set_xlabel("Step")
+    ax.set_xlabel("Stage")
     ax.set_ylabel("Usage Ratio")
     ax.set_ylim(0.0, 1.02)
     _compact_legend(ax, ncol=2)
@@ -134,23 +133,8 @@ def _plot_self_evolution_overview(path: Path, rows: List[Dict[str, Any]]) -> Pat
     ax.plot(xs, _values(rows, "failure_experience_count"), marker="^", color=COLORS["failure"], label="Failure Exp.")
     ax.plot(xs, _values(rows, "skill_count"), marker="D", color=COLORS["skill"], label="Skills")
     _stage_ticks(ax, xs)
-    ax.set_xlabel("Step")
+    ax.set_xlabel("Stage")
     ax.set_ylabel("Count")
     _compact_legend(ax, ncol=2)
-
-    ax = axes[3]
-    ax.stackplot(
-        xs,
-        _values(rows, "api_prompt_tokens_mean"),
-        _values(rows, "api_completion_tokens_mean"),
-        colors=["#9ECAE1", "#F4A261"],
-        labels=["Prompt", "Completion"],
-        alpha=0.82,
-    )
-    ax.plot(xs, _values(rows, "api_total_tokens_mean"), color="#2F2F2F", marker="o", label="Total")
-    _stage_ticks(ax, xs)
-    ax.set_xlabel("Step")
-    ax.set_ylabel("Tokens / Sample")
-    _compact_legend(ax, ncol=3)
 
     return _save_figure(fig, path)

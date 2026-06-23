@@ -12,6 +12,7 @@ import openai
 from typing import Tuple, List, Optional, Dict
 
 from prompts.judge_templates import SYSTEM_PROMPT, QUERY_PROMPT
+from utils.api_usage_logger import log_api_usage
 
 
 # Global client instance (lazily initialized)
@@ -86,6 +87,15 @@ def _analysis_from_response(response_text: str) -> str:
     return "No explanation provided in response" if not response_text else ""
 
 
+def _usage_dict(response) -> Dict:
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return {}
+    if hasattr(usage, "model_dump"):
+        return usage.model_dump()
+    return dict(usage) if isinstance(usage, dict) else {}
+
+
 class LLMJudgeClient:
     """Client for LLM-based answer evaluation using OpenAI-compatible APIs."""
 
@@ -128,18 +138,48 @@ class LLMJudgeClient:
 
         for attempt in range(max_retries):
             try:
+                start = time.time()
+                kwargs = self._request_kwargs(messages, attempt)
                 response = self.client.chat.completions.create(
-                    **self._request_kwargs(messages, attempt)
+                    **kwargs
+                )
+                log_api_usage(
+                    source="Verifier API",
+                    model=self.model_name,
+                    endpoint=os.environ.get("VERIFIER_END_POINT", ""),
+                    payload={"messages": messages},
+                    response_data={"usage": _usage_dict(response)},
+                    elapsed_seconds=time.time() - start,
+                    success=True,
+                    attempt=attempt + 1,
                 )
                 response_text = _response_message_content(response)
                 return _score_from_response_text(response_text), response_text
                 
             except openai.RateLimitError as e:
+                log_api_usage(
+                    source="Verifier API",
+                    model=self.model_name,
+                    endpoint=os.environ.get("VERIFIER_END_POINT", ""),
+                    payload={"messages": messages},
+                    success=False,
+                    error=str(e),
+                    attempt=attempt + 1,
+                )
                 print(f"[RateLimitError] Attempt {attempt + 1}/{max_retries}: {str(e)}")
                 time.sleep(min(3 * (attempt + 1), 10))
                 continue
                 
             except (openai.APIError, openai.APIConnectionError, openai.APITimeoutError) as e:
+                log_api_usage(
+                    source="Verifier API",
+                    model=self.model_name,
+                    endpoint=os.environ.get("VERIFIER_END_POINT", ""),
+                    payload={"messages": messages},
+                    success=False,
+                    error=str(e),
+                    attempt=attempt + 1,
+                )
                 error_code = getattr(e, 'status_code', None) or getattr(e, 'code', None)
                 print(f"[APIError] Attempt {attempt + 1}/{max_retries}: {str(e)} (code: {error_code})")
                 if error_code in {401, 403}:
@@ -351,22 +391,3 @@ def compute_score(
     except Exception as e:
         print(f"[compute_score] Error: {e}")
         return 0.0, f"Evaluation error: {str(e)}"
-
-
-if __name__ == '__main__':
-    # Example usage
-    prediction = [
-        "<think>Looking at the image, I can see a blue sign on the right.</think> "
-        "<answer>The name is J&optica.</answer>"
-    ]
-    ground_truth = "Jptica"
-    
-    extra_info = {
-        "acc_reward_weight": 1.0,
-        "gpt_extract_answer": True,
-        "extract_answer_tags": "strict",
-    }
-    
-    accuracy, analysis = compute_score(question, prediction, ground_truth, extra_info)
-    print(f"Accuracy Score: {accuracy}")
-    print(f"Analysis: {analysis}")

@@ -14,24 +14,32 @@ _METADATA_PREFIXES = (
     "data_source",
     "task",
     "category",
+    "sub_category",
     "domain",
     "subdomain",
+    "sub_domain",
     "subtask",
     "prompt_category",
     "eval_focus",
     "difficulty",
     "level",
+    "match_type",
+    "has_search",
 )
 
 _SKILL_GENERATION_METADATA_PREFIXES = (
     "data_source_",
     "domain_",
     "subdomain_",
+    "sub_domain_",
     "category_",
+    "sub_category_",
     "prompt_category_",
     "eval_focus_",
     "difficulty_",
     "level_",
+    "match_type_",
+    "has_search_",
 )
 
 _GENERIC_CLUSTER_TASK_TAGS = {

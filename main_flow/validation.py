@@ -83,19 +83,19 @@ def _validation_paths(benchmark: str, ctx: MainFlowContext) -> _ValidationPaths:
     memory_name = os.environ.get("MEMORY_NAME") or benchmark
     memory_root_base = os.environ.get("MEMORY_ROOT_BASE", "")
     default_memory_root = (
-        Path(memory_root_base) / memory_name
+        Path(memory_root_base) / memory_name / "memory"
         if memory_root_base
-        else ctx.data_root / "memory_bank" / memory_name
+        else ctx.output_root / benchmark / "memory"
     )
     train_memory_root = Path(os.environ.get("MEMORY_ROOT") or default_memory_root)
 
     stage_dir = ctx.split_root / benchmark / "stages"
-    benchmark_output_root = ctx.output_root / benchmark
+    benchmark_output_root = ctx.output_root / benchmark / "output"
     train_output_root = benchmark_output_root / "train"
     train_stage_root = train_output_root / "stages"
     val_output_root = benchmark_output_root / "val"
     analysis_output_root = benchmark_output_root / "analysis"
-    snapshot_root = Path(os.environ.get("VALIDATION_SNAPSHOT_ROOT") or benchmark_output_root / "validation_snapshots")
+    snapshot_root = Path(os.environ.get("VALIDATION_SNAPSHOT_ROOT") or ctx.output_root / benchmark / "snapshots")
     history_path = Path(os.environ.get("VALIDATION_HISTORY") or benchmark_output_root / "validation_history.jsonl")
     selected_json = Path(os.environ.get("VALIDATION_SELECTED_JSON") or benchmark_output_root / "best_validation_memory.json")
     val_file = ctx.split_root / benchmark / "val.json"
@@ -169,7 +169,7 @@ def _run_training_stage(
         {
             "TRAIN_DATA_PATH": str(stage_json),
             "TRAIN_OUTPUT_DIR": str(paths.train_output_root),
-            "TRAIN_LOG_OUTPUT_DIR": str(ctx.log_root / benchmark / "train" / f"stage_{stage_index}"),
+            "TRAIN_LOG_OUTPUT_DIR": str(ctx.log_root / benchmark / "logs" / "train" / f"stage_{stage_index}"),
             "MAX_SAMPLES_TRAIN": str(train_seen),
         },
     )
@@ -191,7 +191,7 @@ def _run_validation_rollouts(
         {
             "VAL_DATA_PATH": str(paths.val_file),
             "VAL_OUTPUT_DIR": str(val_stage_dir),
-            "VAL_LOG_OUTPUT_DIR": str(ctx.log_root / benchmark / "val" / f"val_stage_{stage_index}"),
+            "VAL_LOG_OUTPUT_DIR": str(ctx.log_root / benchmark / "logs" / "val" / f"val_stage_{stage_index}"),
             "MAX_SAMPLES_VAL": str(_count_json_items(paths.val_file)),
             "MEMORY_ROOT_OVERRIDE": str(validation_memory_root),
         },
@@ -314,7 +314,7 @@ def _finalize_validation_run(
     else:
         output_memory_root = Path(
             os.environ.get("VALIDATION_BEST_MEMORY_ROOT")
-            or ctx.output_root / benchmark / "best_validation_memory"
+            or ctx.output_root / benchmark / "memory" / "best_validation_memory"
         )
     select_best(
         history_path=paths.history_path,

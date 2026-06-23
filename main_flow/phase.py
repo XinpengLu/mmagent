@@ -136,7 +136,7 @@ def _count_samples_for_phase(phase: str, data_path: Path, phase_env: dict[str, s
 
 
 def _resolve_memory_paths(benchmark: str, ctx: MainFlowContext, phase_env: dict[str, str]) -> _MemoryPaths:
-    memory_root = Path(phase_env.get("MEMORY_ROOT_OVERRIDE") or ctx.memory_root_base / benchmark)
+    memory_root = Path(phase_env.get("MEMORY_ROOT_OVERRIDE") or ctx.memory_root_base / benchmark / "memory")
     return _MemoryPaths(
         memory_name=benchmark,
         memory_root=memory_root,
@@ -153,8 +153,9 @@ def _resolve_phase_paths(
 ) -> _PhasePaths:
     prefix = phase.upper()
     data_path = Path(phase_env.get(f"{prefix}_DATA_PATH") or ctx.split_root / benchmark / f"{phase}.json")
-    output_dir = Path(phase_env.get(f"{prefix}_OUTPUT_DIR") or ctx.output_root / benchmark / phase)
-    log_output_dir = Path(phase_env.get(f"{prefix}_LOG_OUTPUT_DIR") or ctx.log_root / benchmark / phase)
+    benchmark_root = ctx.output_root / benchmark
+    output_dir = Path(phase_env.get(f"{prefix}_OUTPUT_DIR") or benchmark_root / "output" / phase)
+    log_output_dir = Path(phase_env.get(f"{prefix}_LOG_OUTPUT_DIR") or benchmark_root / "logs" / phase)
     return _PhasePaths(
         data_path=data_path,
         image_dir=ctx.bench_root,

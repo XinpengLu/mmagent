@@ -14,7 +14,6 @@ from PIL import Image
 
 from .schema import (
     ExperienceLibrary,
-    _load_experience_library_payload,
     _serialize_experience_library,
     format_experience_for_prompt,
     normalize_experience_library,
@@ -28,12 +27,16 @@ METADATA_FIELDS = [
     "task",
     "domain",
     "subdomain",
+    "sub_domain",
     "category",
     "subtask",
+    "sub_category",
     "prompt_category",
     "eval_focus",
     "difficulty",
     "level",
+    "match_type",
+    "has_search",
 ]
 
 
@@ -88,14 +91,14 @@ def sample_metadata_context(sample: dict[str, Any] | None) -> str:
     return "Task metadata: " + ", ".join(tags) if tags else ""
 
 
-def _image_to_base64(image: Image.Image) -> str:
+def image_to_base64(image: Image.Image) -> str:
     """Convert a PIL image to a JPEG base64 string."""
     buffered = io.BytesIO()
     image.save(buffered, format="JPEG")
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
 
-def _find_original_images(sample_dir: Optional[str]) -> List[Path]:
+def find_original_images(sample_dir: Optional[str]) -> List[Path]:
     """Return original images saved beside a sample's trajectories."""
     if not sample_dir:
         return []
@@ -109,21 +112,14 @@ def _find_original_images(sample_dir: Optional[str]) -> List[Path]:
     ]
 
 
-def _write_debug_text(debug_dir: Optional[str], filename: str, content: object) -> None:
-    """Write one optional debug file and ignore filesystem errors."""
+def write_debug_texts(debug_dir: Optional[str], files: Mapping[str, object]) -> None:
+    """Write optional debug files and ignore filesystem errors."""
     if not debug_dir:
         return
-    try:
-        path = Path(debug_dir)
-        path.mkdir(parents=True, exist_ok=True)
-        (path / filename).write_text(str(content or ""), encoding="utf-8")
-    except Exception:
-        pass
-
-
-def _write_debug_texts(debug_dir: Optional[str], files: Mapping[str, object]) -> None:
+    path = Path(debug_dir)
+    path.mkdir(parents=True, exist_ok=True)
     for filename, content in files.items():
-        _write_debug_text(debug_dir, filename, content)
+        (path / filename).write_text(str(content or ""), encoding="utf-8")
 
 
 def load_experiences(path: str) -> ExperienceLibrary:
@@ -131,8 +127,8 @@ def load_experiences(path: str) -> ExperienceLibrary:
     if not path:
         return {}
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            return _load_experience_library_payload(json.load(f))
+        with open(path, "r", encoding="utf-8-sig") as f:
+            return normalize_experience_library(json.load(f)["experiences"])
     except FileNotFoundError:
         return {}
 

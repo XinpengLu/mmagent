@@ -139,7 +139,6 @@ def _reset_validation_state(skills: Dict[str, Any], exp_lib: Dict[str, Any]) -> 
         stats = record.get("stats") if isinstance(record.get("stats"), dict) else {}
         record["stats"] = _clear_validation_stats(stats)
         if record["stats"].get("recovered_from_failure"):
-            record["stats"]["recovery_status"] = "candidate_unverified"
             record["recovery_status"] = "candidate_unverified"
 
 
@@ -308,7 +307,6 @@ def _update_recovery_experience_status(record: Dict[str, Any]) -> None:
     if decision is None:
         return
     status, _, _ = decision
-    record["stats"]["recovery_status"] = status
     record["recovery_status"] = status
 
 
@@ -434,7 +432,7 @@ def _load_memory_for_feedback(memory_root: Path) -> tuple[Path, Path, Dict[str, 
     exp_path = memory_root / "experiences.json"
     index = read_json(index_path) if index_path.exists() else {"schema_version": 1, "skills": {}}
     skills = index.get("skills", {}) if isinstance(index, dict) else {}
-    exp_raw = read_json(exp_path) if exp_path.exists() else {"schema_version": 1, "experiences": {}}
+    exp_raw = read_json(exp_path) if exp_path.exists() else {"experiences": {}}
     exp_lib = exp_raw.get("experiences", exp_raw) if isinstance(exp_raw, dict) else {}
     if isinstance(exp_lib, dict):
         skills = _ensure_skill_metadata(skills, exp_lib)
@@ -579,7 +577,7 @@ def calibrate_validation_status(*, memory_root: Path, output_json: Path | None =
 
     index = read_json(index_path) if index_path.exists() else {"schema_version": 1, "skills": {}}
     skills = index.get("skills", {}) if isinstance(index, dict) else {}
-    exp_raw = read_json(exp_path) if exp_path.exists() else {"schema_version": 1, "experiences": {}}
+    exp_raw = read_json(exp_path) if exp_path.exists() else {"experiences": {}}
     exp_lib = exp_raw.get("experiences", exp_raw) if isinstance(exp_raw, dict) else {}
 
     if isinstance(skills, dict):

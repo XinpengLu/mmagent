@@ -40,17 +40,9 @@ def parse_llm_json(text: str, *, allow_array: bool = True) -> Any:
 
 def parse_llm_json_object(text: str) -> Dict[str, Any]:
     data = parse_llm_json(text, allow_array=True)
-    if isinstance(data, dict):
-        return data
-    if isinstance(data, list) and data and isinstance(data[0], dict):
-        return data[0]
-    return {}
+    return data if isinstance(data, dict) else {}
 
 
 def parse_llm_json_list(text: str) -> List[Any]:
     data = parse_llm_json(text, allow_array=True)
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        return [data]
-    return []
+    return data if isinstance(data, list) else []

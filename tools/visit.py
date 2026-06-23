@@ -17,6 +17,7 @@ except ImportError:
 # Jina API support (fallback when trafilatura fails)
 JINA_API_KEY = os.environ.get("JINA_API_KEY")
 JINA_AVAILABLE = JINA_API_KEY is not None
+JINA_PROXY = os.environ.get("JINA_PROXY")
 
 
 def _is_openai_reasoning_model(model_name: str) -> bool:
@@ -337,7 +338,10 @@ Please respond in JSON format with the following fields:
         
         headers = {
             "Authorization": f"Bearer {JINA_API_KEY}",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+            "Accept": "text/plain,*/*",
         }
+        proxies = {"http": JINA_PROXY, "https": JINA_PROXY} if JINA_PROXY else None
         max_retries = 3
         timeout = 20
         
@@ -346,7 +350,8 @@ Please respond in JSON format with the following fields:
                 response = requests.get(
                     f"https://r.jina.ai/{url}",
                     headers=headers,
-                    timeout=timeout
+                    timeout=timeout,
+                    proxies=proxies,
                 )
                 if response.status_code == 200:
                     webpage_content = response.text

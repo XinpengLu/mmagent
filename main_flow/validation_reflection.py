@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Tuple
 
 from experience import ExperienceLLM, batch_merge, load_experiences, save_library
-from experience.critique import supervised_correction_experiences
+from experience.experience_generation import recovery_experience
 from skill import cluster_experiences_to_skills
 
 from validation_tools.metrics import sample_metric
@@ -265,7 +265,7 @@ def _reflect_one_sample(
     if not summaries:
         return []
 
-    ops = supervised_correction_experiences(
+    ops = recovery_experience(
         _question(sample),
         _groundtruth(sample),
         summaries,

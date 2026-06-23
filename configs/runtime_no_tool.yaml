@@ -1,0 +1,35 @@
+mode: test
+
+benchmarks:
+  - TIR-Bench
+  - MMSearch-Plus
+  - AgentVista
+  - MMBrowseComp
+  - VisualToolBench
+  - BrowseComp-V3
+  - VisBrowse-Bench
+  - Agentic-MME
+
+paths:
+  benchmark_processed: benchmark/processed
+  benchmark_split: benchmark/split
+  system_prompts: baseline/prompts.yaml
+  tool_config: configs/tool_configs.yaml
+
+models:
+  reasoning_model_name: deepseek-v4-flash-ascend
+  verifier_model_name: qwen-chat
+  experience_model_name: deepseek-v4-flash-ascend
+  experience_embedding_model: text-embedding-3-small
+
+baseline:
+  name: no_tool
+  system_prompt: no_tool_direct_cot
+  enabled_tools: ""
+  enable_function_calling: false
+
+runtime:
+  num_workers: 12
+
+rollout:
+  per_sample: 4

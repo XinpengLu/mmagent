@@ -10,7 +10,6 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from experience.schema import (
     ExperienceLibrary,
     format_experience_for_prompt,
-    mark_low_information_success,
     normalize_experience_library,
 )
 from .config import SkillSettings
@@ -73,8 +72,6 @@ def _experience_can_drive_action(record: Dict[str, Any]) -> bool:
         and not allow_unvalidated_recovery_inference()
         and not recovery_has_train_support(record)
     ):
-        return False
-    if (record.get("stats") or {}).get("low_information_success"):
         return False
     tools = {str(tool).strip() for tool in record.get("tool_tags", []) or []}
     return bool(record.get("tool_sequence")) and bool(tools - {"", "reasoning"})
@@ -168,7 +165,7 @@ def _candidate_maps(
     }
     normalized_experiences = normalize_experience_library(candidate_experiences)
     exp_by_id = {
-        str(exp_id): mark_low_information_success(record)
+        str(exp_id): record
         for exp_id, record in normalized_experiences.items()
         if not experience_failed_validation(record)
         and not experience_low_validation_quality(record)
@@ -475,7 +472,7 @@ def collect_linked_experiences(selected_skills: List[Dict[str, Any]], experience
     for skill in selected_skills:
         for exp_id in skill.get("metadata", {}).get("linked_experience_ids", []):
             if exp_id in normalized:
-                linked[exp_id] = mark_low_information_success(normalized[exp_id])
+                linked[exp_id] = normalized[exp_id]
     return linked
 
 

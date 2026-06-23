@@ -14,22 +14,19 @@ from prompts.experience_generation_templates import EXPERIENCE_REFINE_PROMPT, ME
 from configs.runtime import runtime_setting
 from utils.json_utils import parse_llm_json_list
 from .config import ExperienceLibrarySettings
-from .llm_client import ExperienceLLM
+from .experience_llm import ExperienceLLM
 from .retriever import ExperienceRetriever
 from .schema import (
     ExperienceLibrary,
     format_experience_for_prompt,
-    get_experience_content,
-    get_experience_kind,
-    mark_low_information_success,
-    _make_record_for_id,
     _merge_record_metadata,
     normalize_experience_library,
+    normalize_experience_record,
 )
-from .utils import _write_debug_texts
+from .utils import write_debug_texts
 
 
-def _settings() -> ExperienceLibrarySettings:
+def settings() -> ExperienceLibrarySettings:
     return ExperienceLibrarySettings.from_runtime()
 
 
@@ -89,7 +86,6 @@ def _is_reference_protected(record: Any) -> bool:
     return bool(
         record.get("skill_ids")
         or record.get("recovery_status")
-        or stats.get("recovery_status")
         or stats.get("recovered_from_failure")
         or stats.get("supervised_correction")
     )
@@ -130,7 +126,7 @@ class _ExperienceMemoryProvider:
                 for exp_id, emb in getattr(retriever, "_experience_embeddings", {}).items():
                     record = self.experiences.get(exp_id)
                     if record is not None and emb is not None:
-                        self._embedding_cache[get_experience_content(record)] = emb
+                        self._embedding_cache[record["content"]] = emb
             except Exception:
                 pass
 
@@ -199,7 +195,7 @@ class _ExperienceMemoryProvider:
             query_embedding = query_embedding.reshape(1, -1)
 
         exp_ids = list(self.experiences.keys())
-        exp_texts = [get_experience_content(self.experiences[exp_id]) for exp_id in exp_ids]
+        exp_texts = [self.experiences[exp_id]["content"] for exp_id in exp_ids]
         exp_embeddings = self._embed_texts(exp_texts)
         if exp_embeddings.size == 0:
             return []
@@ -220,7 +216,7 @@ class _ExperienceMemoryProvider:
         return candidates
 
     def add_experience(self, exp_id: str, record: Any) -> None:
-        self.experiences[exp_id] = _make_record_for_id(exp_id, record)
+        self.experiences[exp_id] = normalize_experience_record(exp_id, record)
 
     def remove_experience(self, exp_id: str) -> None:
         if exp_id in self.experiences:
@@ -228,7 +224,7 @@ class _ExperienceMemoryProvider:
 
     def modify_experience(self, exp_id: str, new_record: Any) -> None:
         if exp_id in self.experiences:
-            self.experiences[exp_id] = _make_record_for_id(exp_id, new_record)
+            self.experiences[exp_id] = normalize_experience_record(exp_id, new_record)
 
     def to_dict(self) -> ExperienceLibrary:
         return dict(self.experiences)
@@ -240,7 +236,7 @@ def _llm_merge_experiences(
 ) -> Optional[str]:
     if len(candidates) < 2:
         return None
-    settings = _settings()
+    settings = settings()
     max_retries = settings.max_retries if max_retries is None else max_retries
 
     exp_list = [
@@ -272,11 +268,11 @@ def _process_add_with_merge(
     max_retries: Optional[int] = None,
     next_id: int = 0,
 ) -> Tuple[str, bool]:
-    settings = _settings()
+    settings = settings()
     similarity_threshold = settings.merge_similarity_threshold if similarity_threshold is None else similarity_threshold
     exp_id = f"E{next_id}"
-    new_record = mark_low_information_success(_make_record_for_id(exp_id, operation))
-    new_text = get_experience_content(new_record)
+    new_record = normalize_experience_record(exp_id, operation["experience"])
+    new_text = new_record["content"]
     if not new_text:
         return exp_id, False
     if _is_reference_protected(new_record):
@@ -294,11 +290,11 @@ def _process_add_with_merge(
         top_k=settings.similarity_search_top_k,
         similarity_threshold=similarity_threshold,
     )
-    new_kind = get_experience_kind(new_record)
+    new_kind = new_record["kind"]
     candidates = [
         (cand_id, cand_record, score)
         for cand_id, cand_record, score in candidates
-        if get_experience_kind(cand_record) == new_kind
+        if cand_record["kind"] == new_kind
         and _task_tags_compatible(new_record, cand_record)
         and not _is_reference_protected(cand_record)
     ]
@@ -314,9 +310,7 @@ def _process_add_with_merge(
     if merged_text:
         for cand_id, _, _ in candidates:
             provider.remove_experience(cand_id)
-        merged_record = mark_low_information_success(
-            _merge_record_metadata(exp_id, [record for _, record, _ in all_candidates], merged_text)
-        )
+        merged_record = _merge_record_metadata(exp_id, [record for _, record, _ in all_candidates], merged_text)
         provider.add_experience(exp_id, merged_record)
         print(f"    - Merged {len(all_candidates)} experiences into {exp_id}")
         return exp_id, True
@@ -357,7 +351,7 @@ def _reduce_existing_if_needed(
 
 
 def _operation_content(operation: Dict[str, Any]) -> str:
-    return get_experience_content(operation.get("experience", operation)).strip()
+    return operation["experience"]["content"].strip()
 
 
 def _apply_batch_operations(
@@ -400,8 +394,8 @@ def _apply_batch_operations(
 def _apply_modifications(provider: _ExperienceMemoryProvider, operations: List[dict]) -> None:
     for operation in operations:
         modified_from = operation.get("modified_from")
-        new_record = mark_low_information_success(_make_record_for_id(modified_from, operation)) if modified_from else None
-        if modified_from and new_record and get_experience_content(new_record):
+        new_record = normalize_experience_record(modified_from, operation["experience"]) if modified_from else None
+        if modified_from and new_record and new_record["content"]:
             provider.modify_experience(modified_from, new_record)
             print(f"    - Modified {modified_from}")
 
@@ -468,7 +462,7 @@ def batch_merge(
 ) -> ExperienceLibrary:
     """Merge generated operations into the canonical experience library."""
     existing = normalize_experience_library(existing)
-    settings = _settings()
+    settings = settings()
     similarity_threshold = settings.merge_similarity_threshold if similarity_threshold is None else similarity_threshold
     if not updates:
         return _reduce_existing_if_needed(
@@ -508,7 +502,7 @@ def _similar_pairs(current: ExperienceLibrary, provider: _ExperienceMemoryProvid
     exp_ids = list(current.keys())
     if len(exp_ids) < 2:
         return []
-    exp_texts = [get_experience_content(current[exp_id]) for exp_id in exp_ids]
+    exp_texts = [current[exp_id]["content"] for exp_id in exp_ids]
     embeddings = provider._embed_texts(exp_texts)
     if embeddings.size == 0:
         return []
@@ -531,7 +525,7 @@ def _similar_pairs(current: ExperienceLibrary, provider: _ExperienceMemoryProvid
 def _reduction_pair_is_mergeable(current: ExperienceLibrary, exp_id1: str, exp_id2: str) -> bool:
     if exp_id1 not in current or exp_id2 not in current:
         return False
-    if get_experience_kind(current[exp_id1]) != get_experience_kind(current[exp_id2]):
+    if current[exp_id1]["kind"] != current[exp_id2]["kind"]:
         return False
     if not _task_tags_compatible(current[exp_id1], current[exp_id2]):
         return False
@@ -566,9 +560,7 @@ def _merge_pair_for_reduction(
         provider.remove_experience(exp_id1)
         provider.remove_experience(exp_id2)
         new_id = f"E{_max_exp_id(current) + 1}"
-        merged_record = mark_low_information_success(
-            _merge_record_metadata(new_id, [current[exp_id1], current[exp_id2]], merged_text)
-        )
+        merged_record = _merge_record_metadata(new_id, [current[exp_id1], current[exp_id2]], merged_text)
         provider.add_experience(new_id, merged_record)
         del current[exp_id1]
         del current[exp_id2]
@@ -608,7 +600,7 @@ def _reduce_experiences_to_limit(
     retriever: Optional[ExperienceRetriever] = None,
 ) -> ExperienceLibrary:
     current = normalize_experience_library(experiences)
-    settings = _settings()
+    settings = settings()
     max_rounds = settings.reduction_max_rounds if max_rounds is None else max_rounds
     similarity_threshold = settings.reduction_similarity_threshold if similarity_threshold is None else similarity_threshold
     round_idx = 0
@@ -642,7 +634,6 @@ def _experience_prune_rank_key(exp_id: str, record: Dict[str, Any]) -> Tuple[Any
     validation_pass = float(stats.get("validation_pass_rate", 0.0) or 0.0)
     return (
         0,
-        not stats.get("low_information_success"),
         record.get("kind") == "success",
         bool(record.get("tool_sequence")),
         val_used > 0 and (validation_avg > 0.0 or validation_pass > 0.0),
@@ -695,7 +686,7 @@ def _chat_with_retries(
     label: str,
     max_tokens: Optional[int] = None,
 ):
-    settings = _settings()
+    settings = settings()
     max_tokens = settings.refine_max_tokens if max_tokens is None else max_tokens
     for attempt in range(max_retries):
         try:
@@ -725,7 +716,7 @@ def _valid_merge_sources(refined: ExperienceLibrary, merged_from: Any) -> List[s
     valid_sources = [exp_id for exp_id in merged_from or [] if exp_id in refined]
     if len(valid_sources) < 2:
         return []
-    source_kinds = {get_experience_kind(refined[exp_id]) for exp_id in valid_sources}
+    source_kinds = {refined[exp_id]["kind"] for exp_id in valid_sources}
     if len(source_kinds) != 1:
         return []
     if any(_is_reference_protected(refined[exp_id]) for exp_id in valid_sources):
@@ -739,7 +730,7 @@ def _valid_merge_sources(refined: ExperienceLibrary, merged_from: Any) -> List[s
 
 
 def _apply_refine_merge(refined: ExperienceLibrary, op: Dict[str, Any]) -> bool:
-    merged_text = get_experience_content(op.get("experience", op)).strip()
+    merged_text = str(op.get("experience", "")).strip()
     valid_sources = _valid_merge_sources(refined, op.get("merged_from", []))
     if not merged_text or not valid_sources:
         return False
@@ -787,17 +778,17 @@ def refine_experience_library(
     experiences = normalize_experience_library(experiences)
     if not experiences or len(experiences) < 10:
         return experiences
-    settings = _settings()
+    settings = settings()
     max_retries = settings.max_retries if max_retries is None else max_retries
 
     print(f"  [Refine] Starting library refinement: {len(experiences)} experiences")
     prompt = _refine_prompt(experiences)
-    _write_debug_texts(debug_dir, {"exp_refine_prompt.txt": prompt})
+    write_debug_texts(debug_dir, {"exp_refine_prompt.txt": prompt})
 
     response = _chat_with_retries(llm, prompt, max_retries=max_retries, label="Refine")
     if not response:
         return experiences
-    _write_debug_texts(debug_dir, {"exp_refine_resp.txt": response})
+    write_debug_texts(debug_dir, {"exp_refine_resp.txt": response})
 
     operations = _parse_refine_operations(response)
     if operations is None:

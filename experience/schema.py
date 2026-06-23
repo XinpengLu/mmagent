@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from copy import deepcopy
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -8,17 +7,6 @@ from typing import Any, Dict, Iterable, List, Optional
 ExperienceRecord = Dict[str, Any]
 ExperienceLibrary = Dict[str, ExperienceRecord]
 
-EXPERIENCE_LIBRARY_SCHEMA_VERSION = 1
-VALID_KINDS = {"success", "failure"}
-REQUIRED_RECORD_FIELDS = (
-    "id",
-    "kind",
-    "skill_ids",
-    "task_tags",
-    "tool_tags",
-    "content",
-    "stats",
-)
 OPTIONAL_TEXT_FIELDS = (
     "code_template",
     "anti_pattern",
@@ -31,237 +19,63 @@ OPTIONAL_LIST_FIELDS = (
     "source_success_ids",
     "recovery_source_ids",
 )
-OPERATION_METADATA_KEYS = (
+OPERATION_METADATA_FIELDS = (
     "kind",
-    "outcome",
     "skill_ids",
     "task_tags",
     "tool_tags",
     "stats",
     "tool_sequence",
-    "tool_plan",
     "validation_checks",
-    "validation_check",
     "fallback_plan",
-    *OPTIONAL_TEXT_FIELDS,
-    *OPTIONAL_LIST_FIELDS,
+    "code_template",
+    "anti_pattern",
+    "recovery_status",
+    "source_failure_ids",
+    "source_success_ids",
+    "recovery_source_ids",
+    "source_validation_stage",
+    "source_validation_sample_id",
 )
 
 
-def _as_list(value: Any) -> List[str]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return [str(v).strip() for v in value if str(v).strip()]
-    if isinstance(value, tuple) or isinstance(value, set):
-        return [str(v).strip() for v in value if str(v).strip()]
-    if isinstance(value, str):
-        if not value.strip():
-            return []
-        return [part.strip() for part in value.split(",") if part.strip()]
-    return [str(value).strip()] if str(value).strip() else []
+def text_list(value: Any, max_items: Optional[int] = None, *, unique: bool = False) -> List[str]:
+    values = value if isinstance(value, list) else ([value] if value else [])
+    items: List[str] = []
+    for item in values[:max_items]:
+        text = str(item or "").strip()
+        if text and (not unique or text not in items):
+            items.append(text)
+    return items
 
 
-def _as_text_list(value: Any, max_items: int = 6) -> List[str]:
-    """Normalize short free-text lists used by executable memory fields."""
-    if value is None:
-        return []
-    if isinstance(value, str):
-        text = value.strip()
-        return [text] if text else []
-    if isinstance(value, (list, tuple, set)):
-        items = []
-        for item in value:
-            if isinstance(item, dict):
-                text = item.get("text") or item.get("check") or item.get("step") or item.get("purpose")
-            else:
-                text = item
-            text = str(text or "").strip()
-            if text and text not in items:
-                items.append(text)
-            if len(items) >= max_items:
-                break
-        return items
-    text = str(value).strip()
-    return [text] if text else []
-
-
-def _normalize_tool_sequence(value: Any, max_items: int = 5) -> List[Dict[str, str]]:
+def normalize_tool_sequence(value: Any, max_items: int = 5) -> List[Dict[str, str]]:
     """Normalize an ordered tool plan into [{tool, purpose, expected_output}]."""
-    if value is None:
-        return []
-    raw_items = value if isinstance(value, list) else [value]
-    sequence: List[Dict[str, str]] = []
-    for item in raw_items:
-        if isinstance(item, dict):
-            tool = str(item.get("tool") or item.get("name") or "").strip()
-            purpose = str(item.get("purpose") or item.get("action") or item.get("step") or "").strip()
-            expected = str(item.get("expected_output") or item.get("output") or item.get("validation") or "").strip()
-        else:
-            tool = ""
-            purpose = str(item or "").strip()
-            expected = ""
-        if not tool and not purpose:
-            continue
-        normalized = {
-            "tool": tool or "tool",
-            "purpose": purpose or "execute the selected tool-backed check",
+    return [
+        {
+            "tool": str(item.get("tool", "")).strip(),
+            "purpose": str(item.get("purpose", "")).strip(),
+            "expected_output": str(item.get("expected_output", "")).strip(),
         }
-        if expected:
-            normalized["expected_output"] = expected
-        if normalized not in sequence:
-            sequence.append(normalized)
-        if len(sequence) >= max_items:
-            break
-    return sequence
-
-
-def _normalize_evidence_rollouts(value: Any, max_items: int = 8) -> List[Dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    result: List[Dict[str, Any]] = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        kept = {}
-        for key in ("doc_id", "rollout_id", "rollout_idx", "traj_path", "accuracy_score", "success", "final_answer"):
-            if key in item and item[key] is not None:
-                kept[key] = item[key]
-        if kept:
-            result.append(kept)
-        if len(result) >= max_items:
-            break
-    return result
-
-
-def _normalize_kind(value: Any, default: str = "success") -> str:
-    kind = str(value or default).strip().lower()
-    if kind in {"fail", "failed", "error", "negative"}:
-        kind = "failure"
-    if kind in {"correct", "positive"}:
-        kind = "success"
-    return kind if kind in VALID_KINDS else default
-
-
-def _clean_content_text(text: str) -> str:
-    """Keep retrievable experience text free of duplicated structured metadata."""
-    text = str(text or "").strip()
-    if not text:
-        return ""
-    cleaned = re.sub(
-        r"^\s*\[\s*(?:success|failure)\s*;[^\]]+\]\s*",
-        "",
-        text,
-        flags=re.IGNORECASE | re.DOTALL,
-    ).strip()
-    return cleaned or text
-
-
-def get_experience_content(value: Any) -> str:
-    """Return retrievable text from a structured record or generated operation."""
-    if isinstance(value, dict):
-        for key in ("content", "experience", "text"):
-            text = value.get(key)
-            if isinstance(text, str) and text.strip():
-                return _clean_content_text(text)
-        nested = value.get("experience")
-        if isinstance(nested, dict):
-            return get_experience_content(nested)
-        return ""
-    return ""
-
-
-def get_experience_kind(value: Any, default: str = "success") -> str:
-    if isinstance(value, dict):
-        return _normalize_kind(value.get("kind") or value.get("outcome"), default=default)
-    return default
-
-
-def _is_canonical_experience_record(value: Any) -> bool:
-    """Return True if value already has the canonical v1 runtime shape."""
-    if not isinstance(value, dict):
-        return False
-    if any(field not in value for field in REQUIRED_RECORD_FIELDS):
-        return False
-    if value.get("kind") not in VALID_KINDS:
-        return False
-    if not isinstance(value.get("content"), str):
-        return False
-    if not isinstance(value.get("skill_ids"), list):
-        return False
-    if not isinstance(value.get("task_tags"), list):
-        return False
-    if not isinstance(value.get("tool_tags"), list):
-        return False
-    if not isinstance(value.get("stats"), dict):
-        return False
-    return True
-
-
-def _experience_mapping_from_payload(raw: Any) -> Dict[str, Any]:
-    """Extract an id->record mapping from canonical payloads or runtime mappings."""
-    if not isinstance(raw, dict):
-        raise TypeError("Experience library must be a dict.")
-
-    if "schema_version" in raw or "experiences" in raw:
-        if raw.get("schema_version") != EXPERIENCE_LIBRARY_SCHEMA_VERSION:
-            raise ValueError(
-                f"Unsupported experience library schema_version={raw.get('schema_version')!r}; "
-                f"expected {EXPERIENCE_LIBRARY_SCHEMA_VERSION}."
-            )
-        payload = raw.get("experiences")
-        if isinstance(payload, dict):
-            return payload
-        raise ValueError("Canonical experience library must contain an 'experiences' object.")
-
-    # Runtime mapping: {exp_id: ExperienceRecord}.
-    return raw
-
-
-LOW_INFORMATION_SUCCESS_PATTERNS = [
-    r"\bsimilar visual reasoning problem\b",
-    r"\bverified tool-backed solution\b",
-    r"\breuse (?:the )?successful\b",
-    r"\bsuccessful (?:image-analysis|code|tool) path\b",
-    r"\btool-derived (?:visual or numeric )?evidence\b",
-    r"\bdirectly supports the proposed answer\b",
-]
-
-
-def mark_low_information_success(record: ExperienceRecord) -> ExperienceRecord:
-    """Mark generic success summaries so gates can keep them out of tool plans."""
-    if not isinstance(record, dict) or get_experience_kind(record) != "success":
-        return record
-    content = get_experience_content(record).lower()
-    if not any(re.search(pattern, content) for pattern in LOW_INFORMATION_SUCCESS_PATTERNS):
-        return record
-
-    updated = deepcopy(record)
-    stats = dict(updated.get("stats") or {})
-    stats["low_information_success"] = True
-    updated["stats"] = stats
-    return updated
+        for item in (value or [])[:max_items]
+    ]
 
 
 def normalize_experience_record(
     exp_id: str,
     value: Any,
     *,
-    default_kind: str = "success",
     source: Optional[Dict[str, Any]] = None,
 ) -> ExperienceRecord:
-    """Coerce one generated or constructed record into the canonical v1 shape."""
-    data = deepcopy(value) if isinstance(value, dict) else {}
-    nested = data.get("experience")
-    if isinstance(nested, dict):
-        nested_data = deepcopy(nested)
-        nested_data.update({k: v for k, v in data.items() if k not in {"experience"}})
-        data = nested_data
+    """Coerce one generated or constructed record into the canonical shape."""
+    data = deepcopy(value) if isinstance(value, dict) else {"content": str(value or "")}
 
-    content = get_experience_content(data if data else value)
-    kind = get_experience_kind(data, default=default_kind)
+    content = str(data.get("content", "")).strip()
+    kind = str(data.get("kind") or "success").strip().lower()
+    if kind not in {"success", "failure"}:
+        kind = "success"
 
-    stats = data.get("stats") if isinstance(data.get("stats"), dict) else {}
+    stats = data.get("stats") or {}
     record_id = exp_id or str(data.get("id", ""))
     normalized_stats = {
         "support_count": int(stats.get("support_count", 1) or 1),
@@ -269,7 +83,7 @@ def normalize_experience_record(
         "success_after_used": int(stats.get("success_after_used", 0) or 0),
         "failure_after_used": int(stats.get("failure_after_used", 0) or 0),
     }
-    # Keep validation/selection metadata added by the validation loop.
+
     for key, value in stats.items():
         if key in normalized_stats:
             continue
@@ -279,24 +93,26 @@ def normalize_experience_record(
     record = {
         "id": record_id,
         "kind": kind,
-        "skill_ids": _as_list(data.get("skill_ids")),
-        "task_tags": _as_list(data.get("task_tags")),
-        "tool_tags": _as_list(data.get("tool_tags")),
+        "skill_ids": text_list(data.get("skill_ids")),
+        "task_tags": text_list(data.get("task_tags")),
+        "tool_tags": text_list(data.get("tool_tags")),
         "content": content,
         "stats": normalized_stats,
     }
-    tool_sequence = _normalize_tool_sequence(data.get("tool_sequence") or data.get("tool_plan"))
+    tool_sequence = normalize_tool_sequence(data.get("tool_sequence"))
+    
     if tool_sequence:
         record["tool_sequence"] = tool_sequence
-    validation_checks = _as_text_list(data.get("validation_checks") or data.get("validation_check"))
+    validation_checks = text_list(data.get("validation_checks"), 6, unique=True)
+    
     if validation_checks:
         record["validation_checks"] = validation_checks
-    fallback_plan = _as_text_list(data.get("fallback_plan"))
+    fallback_plan = text_list(data.get("fallback_plan"), 6, unique=True)
+    
     if fallback_plan:
         record["fallback_plan"] = fallback_plan
-    evidence_rollouts = _normalize_evidence_rollouts(
-        data.get("evidence_rollouts") or (source or {}).get("evidence_rollouts")
-    )
+    evidence_rollouts = (data.get("evidence_rollouts") or (source or {}).get("evidence_rollouts") or [])[:8]
+    
     if evidence_rollouts:
         record["evidence_rollouts"] = evidence_rollouts
 
@@ -304,8 +120,9 @@ def normalize_experience_record(
         val = data.get(optional_key)
         if isinstance(val, str) and val.strip():
             record[optional_key] = val.strip()
+    
     for optional_key in OPTIONAL_LIST_FIELDS:
-        vals = _as_list(data.get(optional_key))
+        vals = text_list(data.get(optional_key))
         if vals:
             record[optional_key] = vals
     return record
@@ -313,92 +130,30 @@ def normalize_experience_record(
 
 def normalize_experience_library(raw: Any) -> ExperienceLibrary:
     """Validate and normalize an in-memory runtime mapping."""
-    raw = _experience_mapping_from_payload(raw)
     if not raw:
         return {}
 
-    normalized: ExperienceLibrary = {}
-    bad_ids = []
-    for exp_id, value in raw.items():
-        if not _is_canonical_experience_record(value):
-            bad_ids.append(str(exp_id))
-            continue
-        normalized[str(exp_id)] = normalize_experience_record(str(exp_id), value)
-    if bad_ids:
-        preview = ", ".join(bad_ids[:8])
-        suffix = "..." if len(bad_ids) > 8 else ""
-        raise ValueError(f"Non-canonical experience records: {preview}{suffix}")
-    return normalized
-
-
-def _load_experience_library_payload(raw: Any) -> ExperienceLibrary:
-    """Strictly parse the canonical on-disk experience library payload."""
-    if not isinstance(raw, dict):
-        raise TypeError("Experience library JSON must be an object.")
-    if raw.get("schema_version") != EXPERIENCE_LIBRARY_SCHEMA_VERSION:
-        raise ValueError(
-            f"Unsupported experience library schema_version={raw.get('schema_version')!r}; "
-            f"expected {EXPERIENCE_LIBRARY_SCHEMA_VERSION}."
-        )
-    if not isinstance(raw.get("experiences"), dict):
-        raise ValueError("Experience library JSON must contain an 'experiences' object.")
-    return normalize_experience_library(raw["experiences"])
+    return {
+        str(exp_id): normalize_experience_record(str(exp_id), value)
+        for exp_id, value in raw.items()
+    }
 
 
 def _serialize_experience_library(experiences: Dict[str, Any]) -> Dict[str, Any]:
-    """Return the canonical v1 JSON payload written to disk."""
+    """Return the canonical JSON payload written to disk."""
     normalized = normalize_experience_library(experiences)
     records = {
         exp_id: normalize_experience_record(exp_id, record)
         for exp_id, record in normalized.items()
     }
     return {
-        "schema_version": EXPERIENCE_LIBRARY_SCHEMA_VERSION,
         "experiences": records,
     }
-
-
-def _compact_experience_record(value: Any, exp_id: str = "") -> ExperienceRecord:
-    """Serialize a compact record for debug files and prompt-adjacent artifacts."""
-    record = normalize_experience_record(exp_id, value)
-    compact: ExperienceRecord = {
-        "kind": record["kind"],
-        "content": record["content"],
-    }
-    for key in ("task_tags", "tool_tags", "skill_ids"):
-        if record.get(key):
-            compact[key] = record[key]
-    if record.get("stats"):
-        compact["stats"] = record["stats"]
-    for key in (
-        "tool_sequence",
-        "validation_checks",
-        "fallback_plan",
-        *OPTIONAL_TEXT_FIELDS,
-        *OPTIONAL_LIST_FIELDS,
-    ):
-        if record.get(key):
-            compact[key] = record[key]
-    if record.get("evidence_rollouts"):
-        compact["evidence_rollouts"] = record["evidence_rollouts"]
-    return compact
-
-
-def _compact_experience_operation(operation: Dict[str, Any]) -> Dict[str, Any]:
-    """Compact an add/modify operation for debug files."""
-    if not isinstance(operation, dict):
-        return operation
-    compact = {"option": operation.get("option", "add")}
-    if operation.get("modified_from"):
-        compact["modified_from"] = str(operation["modified_from"])
-    compact["experience"] = _compact_experience_record(operation.get("experience", operation))
-    return compact
 
 
 def _normalize_experience_operation(
     operation: Dict[str, Any],
     *,
-    default_kind: str = "success",
     source: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Normalize LLM-produced add/modify operations while preserving metadata."""
@@ -409,44 +164,10 @@ def _normalize_experience_operation(
     if option not in {"add", "modify"}:
         option = "add"
 
-    payload = operation.get("experience")
-    if isinstance(payload, dict):
-        data = deepcopy(payload)
-        for key in OPERATION_METADATA_KEYS:
-            if key not in data and key in operation:
-                data[key] = operation[key]
-        # Some callers add benchmark metadata at the operation level after an
-        # LLM has produced an `experience` payload. Merge list-like metadata
-        # instead of letting the nested payload silently drop it.
-        for list_key in ("task_tags", "tool_tags", "skill_ids"):
-            if list_key in operation:
-                merged: List[str] = []
-                for item in _as_list(data.get(list_key)) + _as_list(operation.get(list_key)):
-                    if item not in merged:
-                        merged.append(item)
-                data[list_key] = merged
-    else:
-        data = {
-            "kind": operation.get("kind") or operation.get("outcome") or default_kind,
-            "skill_ids": operation.get("skill_ids", []),
-            "task_tags": operation.get("task_tags", []),
-            "tool_tags": operation.get("tool_tags", []),
-            "content": operation.get("content") or operation.get("experience") or operation.get("exp") or operation.get("text"),
-            "stats": operation.get("stats", {}),
-            "tool_sequence": operation.get("tool_sequence") or operation.get("tool_plan"),
-            "validation_checks": operation.get("validation_checks") or operation.get("validation_check"),
-            "fallback_plan": operation.get("fallback_plan"),
-            "code_template": operation.get("code_template"),
-            "anti_pattern": operation.get("anti_pattern"),
-            "recovery_status": operation.get("recovery_status"),
-            "source_failure_ids": operation.get("source_failure_ids"),
-            "source_success_ids": operation.get("source_success_ids"),
-            "recovery_source_ids": operation.get("recovery_source_ids"),
-            "source_validation_stage": operation.get("source_validation_stage"),
-            "source_validation_sample_id": operation.get("source_validation_sample_id"),
-        }
+    data = {key: operation.get(key) for key in OPERATION_METADATA_FIELDS}
+    data["content"] = operation.get("content")
 
-    record = normalize_experience_record("", data, default_kind=default_kind, source=source)
+    record = normalize_experience_record("", data, source=source)
     if not record["content"]:
         return None
 
@@ -454,11 +175,6 @@ def _normalize_experience_operation(
     if option == "modify" and operation.get("modified_from"):
         normalized["modified_from"] = str(operation["modified_from"])
     return normalized
-
-
-def _make_record_for_id(exp_id: str, operation: Any) -> ExperienceRecord:
-    payload = operation.get("experience", operation) if isinstance(operation, dict) else operation
-    return normalize_experience_record(exp_id, payload)
 
 
 def _merge_sorted_record_list(records: List[ExperienceRecord], key: str) -> List[str]:
@@ -469,11 +185,9 @@ def _append_unique_until_limit(
     target: List[Any],
     values: Iterable[Any],
     limit: int,
-    *,
-    require_dict: bool = False,
 ) -> None:
     for value in values or []:
-        if (not require_dict or isinstance(value, dict)) and value not in target:
+        if value not in target:
             target.append(value)
         if len(target) >= limit:
             break
@@ -481,14 +195,8 @@ def _append_unique_until_limit(
 
 def _append_unique_texts(target: List[str], values: Iterable[Any]) -> None:
     for value in values or []:
-        text = str(value).strip()
-        if text and text not in target:
-            target.append(text)
-
-
-def _record_stats(record: ExperienceRecord) -> Dict[str, Any]:
-    stats = record.get("stats")
-    return stats if isinstance(stats, dict) else {}
+        if value and value not in target:
+            target.append(value)
 
 
 def _merge_record_sequences(records: List[ExperienceRecord]) -> Dict[str, Any]:
@@ -501,10 +209,10 @@ def _merge_record_sequences(records: List[ExperienceRecord]) -> Dict[str, Any]:
         "anti_pattern": "",
     }
     for record in records:
-        _append_unique_until_limit(merged["tool_sequence"], record.get("tool_sequence", []), 5, require_dict=True)
+        _append_unique_until_limit(merged["tool_sequence"], record.get("tool_sequence", []), 5)
         _append_unique_until_limit(merged["validation_checks"], record.get("validation_checks", []), 6)
         _append_unique_until_limit(merged["fallback_plan"], record.get("fallback_plan", []), 4)
-        _append_unique_until_limit(merged["evidence_rollouts"], record.get("evidence_rollouts", []), 8, require_dict=True)
+        _append_unique_until_limit(merged["evidence_rollouts"], record.get("evidence_rollouts", []), 8)
         if not merged["code_template"] and record.get("code_template"):
             merged["code_template"] = record["code_template"]
         if not merged["anti_pattern"] and record.get("anti_pattern"):
@@ -525,7 +233,7 @@ def _merge_validation_and_recovery(records: List[ExperienceRecord]) -> Dict[str,
         "recovery_source_ids": [],
     }
     for record in records:
-        stats = _record_stats(record)
+        stats = record["stats"]
         count = int(stats.get("validation_used_count", 0) or 0)
         merged["validation_used"] += count
         merged["validation_score_sum"] += float(
@@ -539,7 +247,7 @@ def _merge_validation_and_recovery(records: List[ExperienceRecord]) -> Dict[str,
         stage = str(stats.get("last_validation_stage") or "")
         if stage:
             merged["last_validation_stage"] = stage
-        status = str(record.get("recovery_status") or stats.get("recovery_status") or "").strip()
+        status = str(record.get("recovery_status") or "").strip()
         if status:
             merged["recovery_statuses"].append(status)
         merged["recovered_from_failure"] = (
@@ -562,11 +270,12 @@ def _merged_recovery_status(statuses: List[str]) -> str:
 
 
 def _merge_record_stats(records: List[ExperienceRecord], recovery: Dict[str, Any]) -> Dict[str, Any]:
+    stats = [record["stats"] for record in records]
     merged_stats = {
-        "support_count": sum(_record_stats(record).get("support_count", 1) for record in records),
-        "used_count": sum(_record_stats(record).get("used_count", 0) for record in records),
-        "success_after_used": sum(_record_stats(record).get("success_after_used", 0) for record in records),
-        "failure_after_used": sum(_record_stats(record).get("failure_after_used", 0) for record in records),
+        "support_count": sum(item.get("support_count", 1) for item in stats),
+        "used_count": sum(item.get("used_count", 0) for item in stats),
+        "success_after_used": sum(item.get("success_after_used", 0) for item in stats),
+        "failure_after_used": sum(item.get("failure_after_used", 0) for item in stats),
     }
     validation_used = recovery["validation_used"]
     if validation_used:
@@ -583,15 +292,12 @@ def _merge_record_stats(records: List[ExperienceRecord], recovery: Dict[str, Any
             merged_stats["last_validation_stage"] = recovery["last_validation_stage"]
     if recovery["recovered_from_failure"]:
         merged_stats["recovered_from_failure"] = True
-        status = _merged_recovery_status(recovery["recovery_statuses"])
-        if status:
-            merged_stats["recovery_status"] = status
     return merged_stats
 
 
 def _merge_record_metadata(exp_id: str, records: Iterable[Any], content: str) -> ExperienceRecord:
     """Create one structured record from several same-kind records and merged content."""
-    normalized = [normalize_experience_record("", record) for record in records if get_experience_content(record)]
+    normalized = [normalize_experience_record("", record) for record in records if str(record.get("content", "")).strip()]
     if not normalized:
         return normalize_experience_record(exp_id, {"content": content})
 
@@ -607,8 +313,9 @@ def _merge_record_metadata(exp_id: str, records: Iterable[Any], content: str) ->
         "stats": _merge_record_stats(normalized, recovery),
         **sequence_fields,
     }
-    if recovery["recovered_from_failure"] and payload["stats"].get("recovery_status"):
-        payload["recovery_status"] = payload["stats"]["recovery_status"]
+    status = _merged_recovery_status(recovery["recovery_statuses"])
+    if recovery["recovered_from_failure"] and status:
+        payload["recovery_status"] = status
     for key in ("source_failure_ids", "source_success_ids", "recovery_source_ids"):
         if recovery[key]:
             payload[key] = recovery[key]
