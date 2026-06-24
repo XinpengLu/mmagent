@@ -6,6 +6,7 @@ import random
 import json
 import requests
 from utils.api_usage_logger import log_api_usage
+from utils.key_pool import openai_should_rotate, retire_current_key
 
 NON_RETRYABLE_STATUS_CODES = {400, 401, 403, 404}
 API_TIMEOUT_SECONDS = 240
@@ -144,6 +145,21 @@ def _api_error_info(response, api_name: str, error_type: str = None) -> str:
     return f"{api_name}: {error_type}" if error_type else f"{api_name}: unknown_error"
 
 
+def _response_error_message(response) -> str:
+    if response is None:
+        return ""
+    try:
+        detail = response.json()
+    except Exception:
+        return getattr(response, "text", "")
+    if isinstance(detail, dict):
+        error = detail.get("error")
+        if isinstance(error, dict):
+            return str(error.get("message") or error)
+        return str(detail)
+    return str(detail)
+
+
 def _attempt_suffix(attempt: int, max_attempts: int) -> str:
     return f" on attempt {attempt + 1}/{max_attempts}" if max_attempts > 1 else ""
 
@@ -217,7 +233,8 @@ def _parse_choice_message(result: dict, response, api_name: str, attempt: int, m
 
 def _parse_empty_or_invalid_choices(result: dict, api_name: str, attempt: int, max_attempts: int):
     suffix = _attempt_suffix(attempt, max_attempts)
-    if "choices" not in result or len(result["choices"]) != 0:
+    choices = result.get("choices")
+    if not isinstance(choices, list) or len(choices) != 0:
         print(f"[{api_name}] Invalid API response format{suffix}: {result}")
         return None, False, "invalid_format"
 
@@ -294,12 +311,12 @@ def _retry_after_parse_error(response, api_name: str, error_type: str, attempt: 
 
 def _try_single_api(api_key: str, end_point: str, model_name: str, messages: list, 
                     sampling_params: dict, max_retries: int, api_name: str = "API", tools: list = None):
-    headers = _api_headers(api_key)
     payload = _build_payload(model_name, messages, sampling_params, tools)
     _add_reasoning_param(payload, model_name, end_point)
     last_error = None
     
     for attempt in range(max_retries):
+        headers = _api_headers(api_key)
         response, request_error = _make_api_request(end_point, headers, payload, api_name)
         _log_reasoning_usage(api_name, model_name, end_point, payload, response, request_error, attempt)
         if request_error:
@@ -309,6 +326,9 @@ def _try_single_api(api_key: str, end_point: str, model_name: str, messages: lis
             return None, last_error
 
         if response.status_code == 429:
+            if openai_should_rotate(response.status_code, _response_error_message(response)):
+                api_key = retire_current_key("openai", api_key)
+                continue
             should_retry, last_error = _retry_after_rate_limit(api_name, attempt, max_retries)
             if should_retry:
                 continue
@@ -317,6 +337,10 @@ def _try_single_api(api_key: str, end_point: str, model_name: str, messages: lis
         result, is_429, error_type = _parse_api_response(response, api_name, attempt=attempt, max_attempts=max_retries)
         if result is not None:
             return result, None
+
+        if error_type == "http_error" and openai_should_rotate(response.status_code, _response_error_message(response)):
+            api_key = retire_current_key("openai", api_key)
+            continue
 
         should_retry, last_error = _retry_after_parse_error(response, api_name, error_type, attempt, max_retries)
         if should_retry:

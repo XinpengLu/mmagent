@@ -8,6 +8,7 @@ import os
 import requests
 from tools.base import BaseTool
 from tools.tool_registry import register_tool
+from utils.key_pool import current_key, jina_should_rotate, retire_current_key
 
 try:
     import trafilatura
@@ -15,9 +16,11 @@ except ImportError:
     trafilatura = None  # optional: Jina can be used instead
 
 # Jina API support (fallback when trafilatura fails)
-JINA_API_KEY = os.environ.get("JINA_API_KEY")
-JINA_AVAILABLE = JINA_API_KEY is not None
 JINA_PROXY = os.environ.get("JINA_PROXY")
+
+
+def _jina_available() -> bool:
+    return bool(os.environ.get("JINA_API_KEY") or os.environ.get("JINA_KEY_FILE"))
 
 
 def _is_openai_reasoning_model(model_name: str) -> bool:
@@ -47,7 +50,7 @@ class Visit(BaseTool):
     
     def __init__(self, config=None):
         super().__init__(config)
-        if trafilatura is None and not JINA_AVAILABLE:
+        if trafilatura is None and not _jina_available():
             raise ImportError("Either trafilatura or JINA_API_KEY is required for Visit tool")
         
         # Configuration
@@ -100,7 +103,7 @@ class Visit(BaseTool):
             downloaded = None
             # Prioritize using Jina for extraction, then fallback to requests + trafilatura
             content = None
-            if JINA_AVAILABLE:
+            if _jina_available():
                 print("[Visit] Trying Jina API first...")
                 downloaded = self._jina_readpage(url)
                 if downloaded and not downloaded.startswith("[visit] Failed to read page."):
@@ -161,7 +164,7 @@ class Visit(BaseTool):
                     print("[Visit] Trafilatura not available, skipped local extraction")
                 
                 # If requests+trafilatura still fails, try Jina last (prevent Jina from failing initially)
-                if not content and JINA_AVAILABLE:
+                if not content and _jina_available():
                     print(f"[Visit] Fallback to Jina API after other methods failed...")
                     content = self._jina_readpage(url)
                     if content and not content.startswith("[visit] Failed to read page."):
@@ -333,11 +336,12 @@ Please respond in JSON format with the following fields:
         Returns:
             str: The webpage content or error message
         """
-        if not JINA_AVAILABLE:
+        api_key = current_key("jina") if os.environ.get("JINA_KEY_FILE") else os.environ.get("JINA_API_KEY")
+        if not api_key:
             return "[visit] Jina API not available (JINA_API_KEY not set)"
         
         headers = {
-            "Authorization": f"Bearer {JINA_API_KEY}",
+            "Authorization": f"Bearer {api_key}",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
             "Accept": "text/plain,*/*",
         }
@@ -358,6 +362,10 @@ Please respond in JSON format with the following fields:
                     return webpage_content
                 else:
                     print(f"[Visit] Jina API error {response.status_code}: {response.text}")
+                    if jina_should_rotate(response.status_code, response.text):
+                        api_key = retire_current_key("jina", api_key)
+                        headers["Authorization"] = f"Bearer {api_key}"
+                        continue
                     if attempt == max_retries - 1:
                         return "[visit] Failed to read page."
             except Exception as e:

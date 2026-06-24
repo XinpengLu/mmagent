@@ -7,6 +7,7 @@ import json
 import requests
 from tools.base import BaseTool
 from tools.tool_registry import register_tool
+from utils.key_pool import retire_current_key, serp_should_rotate
 
 
 @register_tool("web_search")
@@ -117,6 +118,9 @@ class WebSearch(BaseTool):
                 if response.status_code != 200:
                     error_msg = f"API request failed with status {response.status_code}: {response.text[:200]}"
                     print(f"[WebSearch] {error_msg}")
+                    if serp_should_rotate(response.status_code, response.text):
+                        self.api_key = retire_current_key("serp", self.api_key)
+                        continue
                     if attempt < max_retries - 1:
                         print(f"[WebSearch] Retrying in {retry_delay} seconds...")
                         import time
@@ -150,6 +154,9 @@ class WebSearch(BaseTool):
                     # Check if there is error information
                     error_info = result_data.get("error", "")
                     if error_info:
+                        if serp_should_rotate(response.status_code, str(error_info)):
+                            self.api_key = retire_current_key("serp", self.api_key)
+                            continue
                         return f"Error: {error_info}"
                     return f"No results found for query: '{query}'"
                 

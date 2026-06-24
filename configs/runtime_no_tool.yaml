@@ -29,6 +29,5 @@ rollout:
   max_tokens: 8192
 
 api:
-  openai_api_key:  sk-rKFPCD23jeyOnfWiP5QjCwiiTrKnbJrYV02M5utDsqpf0JUt
-  # openai_api_key: sk-wsUqriC2NjivVMqbegcpUNZXL2yqDYo2Ph34bomOFNJ1oOq9
+  openai_key_file: configs/keys/openai.keys
   openai_base_url: "https://card.nassaapi.xyz/v1"

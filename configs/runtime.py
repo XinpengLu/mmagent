@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from utils.key_pool import configure_key_file
 
 
 VALID_MODES = {"train", "val", "test", "train_test", "train_val", "train_val_test"}
@@ -173,7 +174,22 @@ def _flatten_compat_env(settings: dict[str, Any]) -> dict[str, str]:
     for generated_name, legacy_name in COMPAT_ENV_ALIASES.items():
         if generated_name in env:
             env[legacy_name] = env.pop(generated_name)
+    _apply_key_files(env)
     return env
+
+
+def _apply_key_files(env: dict[str, str]) -> None:
+    key_files = {
+        "openai": env.get("OPENAI_KEY_FILE"),
+        "serp": env.get("SERPAPI_KEY_FILE"),
+        "jina": env.get("JINA_KEY_FILE"),
+    }
+    if key_files["openai"]:
+        env["OPENAI_API_KEY"] = configure_key_file("openai", key_files["openai"])
+    if key_files["serp"]:
+        env["SERPAPI_KEY"] = configure_key_file("serp", key_files["serp"])
+    if key_files["jina"]:
+        env["JINA_API_KEY"] = configure_key_file("jina", key_files["jina"])
 
 
 def _load_benchmarks(payload: dict[str, Any]) -> list[str]:

@@ -39,8 +39,8 @@ rollout:
   max_tokens: 8192
 
 api:
-  openai_api_key: sk-xqBrzMAhS3uOkKUXj3IGCA
+  openai_key_file: configs/keys/openai.keys
   openai_base_url: "https://api.llm.ustc.edu.cn/v1"
-  serpapi_key: 39ed7c9f34a2bc6b3bd4c0007cd6074d63355845
-  jina_api_key: jina_70def61533ae4c51a69bc208606dc05domvCXdrHgUf9eyj9TtfFlc0_lUwx
+  serpapi_key_file: configs/keys/serp.keys
+  jina_key_file: configs/keys/jina.keys
   jina_proxy: "http://127.0.0.1:7890"

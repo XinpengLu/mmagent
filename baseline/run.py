@@ -11,6 +11,7 @@ from typing import Any
 import yaml
 
 from configs.runtime import PROJECT_ROOT, RuntimeConfig, RuntimePaths
+from utils.key_pool import configure_key_file
 
 
 CONFIG_DIR = PROJECT_ROOT / "configs"
@@ -109,7 +110,17 @@ def _flatten_settings(settings: dict[str, Any]) -> dict[str, str]:
     env["ROLLOUTS_PER_SAMPLE"] = env.pop("ROLLOUT_PER_SAMPLE")
     if "BASELINE_ENABLE_FUNCTION_CALLING" in env:
         env["ENABLE_FUNCTION_CALLING"] = env["BASELINE_ENABLE_FUNCTION_CALLING"]
+    _apply_key_files(env)
     return env
+
+
+def _apply_key_files(env: dict[str, str]) -> None:
+    if env.get("OPENAI_KEY_FILE"):
+        env["OPENAI_API_KEY"] = configure_key_file("openai", env["OPENAI_KEY_FILE"])
+    if env.get("SERPAPI_KEY_FILE"):
+        env["SERPAPI_KEY"] = configure_key_file("serp", env["SERPAPI_KEY_FILE"])
+    if env.get("JINA_KEY_FILE"):
+        env["JINA_API_KEY"] = configure_key_file("jina", env["JINA_KEY_FILE"])
 
 
 def _apply_baseline_env(runtime: RuntimeConfig) -> None:

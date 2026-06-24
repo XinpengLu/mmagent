@@ -10,6 +10,7 @@ from io import BytesIO
 from PIL import Image
 from tools.base import BaseTool
 from tools.tool_registry import register_tool
+from utils.key_pool import retire_current_key, serp_should_rotate
 
 
 @register_tool("image_search")
@@ -432,6 +433,9 @@ You only have limited search times, so please use it wisely.
             if response.status_code != 200:
                 error_msg = f"API request failed with status {response.status_code}: {response.text[:200]}"
                 print(f"[ImageSearch] {error_msg}")
+                if serp_should_rotate(response.status_code, response.text):
+                    self.api_key = retire_current_key("serp", self.api_key)
+                    return self._text_to_image_search(params, max_results, save_dir)
                 return f"Error: {error_msg}"
             
             # Parse response
@@ -449,6 +453,9 @@ You only have limited search times, so please use it wisely.
                 # Check if there is error information
                 error_info = result_data.get("error", "")
                 if error_info:
+                    if serp_should_rotate(response.status_code, str(error_info)):
+                        self.api_key = retire_current_key("serp", self.api_key)
+                        return self._text_to_image_search(params, max_results, save_dir)
                     return f"Error: {error_info}"
                 return f"No images found for query: '{query}'"
             
@@ -560,6 +567,9 @@ You only have limited search times, so please use it wisely.
                     if attempt < max_retries - 1:
                         error_text = response.text[:200] if hasattr(response, 'text') else str(response)
                         print(f"[ImageSearch] Request failed (attempt {attempt + 1}/{max_retries}): status {response.status_code}, {error_text}, retrying...")
+                        if serp_should_rotate(response.status_code, error_text):
+                            self.api_key = retire_current_key("serp", self.api_key)
+                            continue
                         import time
                         time.sleep(retry_delay)
                         retry_delay *= 2
@@ -586,6 +596,9 @@ You only have limited search times, so please use it wisely.
                 error_text = response.text[:500] if hasattr(response, 'text') else str(response)
                 error_msg = f"API request failed with status {response.status_code}: {error_text}"
                 print(f"[ImageSearch] {error_msg}")
+                if serp_should_rotate(response.status_code, error_text):
+                    self.api_key = retire_current_key("serp", self.api_key)
+                    return self._reverse_image_search(params, max_results, save_dir)
                 return f"Error: {error_msg}"
             
             # Parse response
