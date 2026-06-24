@@ -7,7 +7,6 @@ from engine.api_processors import set_global_prompts as set_processors_prompts
 
 DEFAULT_TEMPERATURE = 0.6
 DEFAULT_TOP_P = 1.0
-DEFAULT_MAX_COMPLETION_TOKENS = 8192
 
 
 class ExperimentConfig:
@@ -77,5 +76,5 @@ class ExperimentConfig:
         self.sampling_params = {
             "temperature": DEFAULT_TEMPERATURE,
             "top_p": DEFAULT_TOP_P,
-            "max_tokens": DEFAULT_MAX_COMPLETION_TOKENS,
+            "max_tokens": int(self.args.max_tokens),
         }

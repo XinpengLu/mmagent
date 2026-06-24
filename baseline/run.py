@@ -9,13 +9,11 @@ from types import SimpleNamespace
 from typing import Any
 
 import yaml
-from dotenv import load_dotenv
 
 from configs.runtime import PROJECT_ROOT, RuntimeConfig, RuntimePaths
 
 
 CONFIG_DIR = PROJECT_ROOT / "configs"
-ENV_FILE_PATH = CONFIG_DIR / ".env"
 SEARCH_BENCHMARKS = {
     "AgentVista",
     "MMSearch-Plus",
@@ -37,6 +35,18 @@ DISABLED_MEMORY_SETTINGS = {
     "memory_rerank_top_experiences": 0,
     "experience_retrieval_top_k": 0,
     "experience_retrieval_min_similarity": 0.0,
+}
+
+BASELINE_CONFIG_ONLY_FIELDS = {
+    "name",
+    "system_prompt",
+    "enabled_tools",
+    "code_prompt",
+    "general_prompt",
+    "search_prompt",
+    "code_tools",
+    "general_tools",
+    "search_tools",
 }
 
 
@@ -94,7 +104,7 @@ def _flatten_settings(settings: dict[str, Any]) -> dict[str, str]:
         env["_".join(part.upper() for part in prefix)] = "true" if value is True else "false" if value is False else str(value)
 
     for section, values in settings.items():
-        prefix = () if section in {"runtime", "models"} else (section,)
+        prefix = () if section in {"runtime", "models", "api"} else (section,)
         visit(prefix, values)
     env["ROLLOUTS_PER_SAMPLE"] = env.pop("ROLLOUT_PER_SAMPLE")
     if "BASELINE_ENABLE_FUNCTION_CALLING" in env:
@@ -103,10 +113,9 @@ def _flatten_settings(settings: dict[str, Any]) -> dict[str, str]:
 
 
 def _apply_baseline_env(runtime: RuntimeConfig) -> None:
-    api_key = os.environ["OPENAI_API_KEY"]
-    base_url = (os.environ.get("OPENAI_BASE_URL") or os.environ.get("OPENAI_API_BASE") or "").rstrip("/")
-    chat_url = os.environ.get("OPENAI_CHAT_COMPLETIONS_URL", "").rstrip("/") or f"{base_url}/chat/completions"
-
+    api_key = runtime.compat_env["OPENAI_API_KEY"]
+    base_url = runtime.compat_env["OPENAI_BASE_URL"].rstrip("/")
+    chat_url = f"{base_url}/chat/completions"
     os.environ.update(
         {
             "DATA_ROOT": str(runtime.paths.data_root),
@@ -131,7 +140,7 @@ def _apply_baseline_env(runtime: RuntimeConfig) -> None:
 def _baseline_prompt_and_tools(benchmark: str, settings: dict[str, Any]) -> tuple[str, str]:
     baseline = settings["baseline"]
     if baseline["name"] == "no_tool":
-        return str(baseline["system_prompt"]), ""
+        return str(baseline["system_prompt"]), str(baseline.get("enabled_tools", ""))
     if benchmark in GENERAL_TOOL_BENCHMARKS:
         return str(baseline["general_prompt"]), str(baseline["general_tools"])
     if benchmark in SEARCH_BENCHMARKS:
@@ -152,7 +161,7 @@ def _build_args(runtime: RuntimeConfig, benchmark: str, max_samples: int | None)
     system_prompt, enabled_tools = _baseline_prompt_and_tools(benchmark, settings)
     data_path = paths.split_root / benchmark / "test.json"
     output_dir = paths.output_root / benchmark / "test"
-    return SimpleNamespace(
+    args = SimpleNamespace(
         phase="test",
         input_file=str(data_path),
         image_folder=str(paths.bench_root),
@@ -160,6 +169,7 @@ def _build_args(runtime: RuntimeConfig, benchmark: str, max_samples: int | None)
         max_samples=_sample_count(data_path, max_samples),
         num_workers=int(settings["runtime"]["num_workers"]),
         rollouts_per_sample=int(settings["rollout"]["per_sample"]),
+        max_tokens=int(settings["rollout"]["max_tokens"]),
         system_prompts_path=str(paths.system_prompts),
         tool_config_path=str(paths.tool_config),
         system_prompt_key=system_prompt,
@@ -168,9 +178,16 @@ def _build_args(runtime: RuntimeConfig, benchmark: str, max_samples: int | None)
         experience_library="",
         skill_library="",
     )
+    for key, value in settings.get("baseline", {}).items():
+        if key not in BASELINE_CONFIG_ONLY_FIELDS:
+            setattr(args, key, value)
+    return args
 
 
 def _run_benchmark(runtime: RuntimeConfig, benchmark: str, max_samples: int | None) -> None:
+    from baseline.expel import run_expel_benchmark
+    from baseline.reflexion import run_reflexion_benchmark
+    from baseline.trace2skill import run_trace2skill_benchmark
     from main_flow.config import ExperimentConfig
     from main_flow.metrics import _save_results, compute_dataset_summary
     from main_flow.phase import write_phase_summary
@@ -190,15 +207,22 @@ def _run_benchmark(runtime: RuntimeConfig, benchmark: str, max_samples: int | No
     set_configured_callable_tools(args.enabled_tools)
 
     config = ExperimentConfig(args).load()
-    memory_runtime = MemoryRuntime(args, config.base_system_prompt).initialize()
-    all_results = RolloutRunner(config, memory_runtime, TrainingMemoryUpdater(args, memory_runtime)).run()
+    baseline_name = str(runtime.settings["baseline"]["name"])
+    if baseline_name == "reflexion":
+        all_results = run_reflexion_benchmark(config, args)
+    elif baseline_name == "expel":
+        all_results = run_expel_benchmark(config, args)
+    elif baseline_name == "trace2skill":
+        all_results = run_trace2skill_benchmark(config, args)
+    else:
+        memory_runtime = MemoryRuntime(args, config.base_system_prompt).initialize()
+        all_results = RolloutRunner(config, memory_runtime, TrainingMemoryUpdater(args, memory_runtime)).run()
     _save_results(all_results, args.output_dir)
     compute_dataset_summary(config.data, args)
     write_phase_summary(Path(args.output_dir), args.rollouts_per_sample)
 
 
 def run(config_path: Path, max_samples: int | None) -> None:
-    load_dotenv(ENV_FILE_PATH, override=True)
     runtime = _runtime_from_yaml(config_path)
     _apply_baseline_env(runtime)
     for benchmark in runtime.benchmarks:

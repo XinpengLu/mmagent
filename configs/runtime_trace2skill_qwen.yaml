@@ -1,0 +1,46 @@
+mode: test
+
+benchmarks:
+  - VisualToolBench
+  - BrowseComp-V3
+  - VisBrowse-Bench
+  - Agentic-MME
+
+paths:
+  benchmark_processed: benchmark/processed
+  benchmark_split: benchmark/split
+  system_prompts: baseline/trace2skill_prompts.yaml
+  tool_config: configs/tool_configs.yaml
+
+models:
+  reasoning_model_name: qwen3.6-chat
+  verifier_model_name: qwen-chat
+  experience_model_name: qwen3.6-chat
+  experience_embedding_model: text-embedding-3-small
+
+baseline:
+  name: trace2skill
+  code_prompt: trace2skill_tool_code
+  general_prompt: trace2skill_tool_general
+  search_prompt: trace2skill_tool_search
+  code_tools: code_interpreter
+  general_tools: "web_search, visit, code_interpreter"
+  search_tools: "web_search, image_search, visit, code_interpreter"
+  enable_function_calling: true
+  trace2skill_train_samples: 100
+  trace2skill_lesson_max_tokens: 512
+  trace2skill_guide_max_tokens: 2048
+
+runtime:
+  num_workers: 1
+
+rollout:
+  per_sample: 4
+  max_tokens: 8192
+
+api:
+  openai_api_key: sk-xqBrzMAhS3uOkKUXj3IGCA
+  openai_base_url: "https://api.llm.ustc.edu.cn/v1"
+  serpapi_key: 39ed7c9f34a2bc6b3bd4c0007cd6074d63355845
+  jina_api_key: jina_70def61533ae4c51a69bc208606dc05domvCXdrHgUf9eyj9TtfFlc0_lUwx
+  jina_proxy: "http://127.0.0.1:7890"

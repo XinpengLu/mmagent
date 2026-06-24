@@ -1,13 +1,6 @@
 mode: test
 
 benchmarks:
-  - TIR-Bench
-  - MMSearch-Plus
-  - AgentVista
-  - MMBrowseComp
-  - VisualToolBench
-  - BrowseComp-V3
-  - VisBrowse-Bench
   - Agentic-MME
 
 paths:
@@ -17,9 +10,9 @@ paths:
   tool_config: configs/tool_configs.yaml
 
 models:
-  reasoning_model_name: deepseek-v4-flash-ascend
-  verifier_model_name: qwen-chat
-  experience_model_name: deepseek-v4-flash-ascend
+  reasoning_model_name: deepseek-v4-flash
+  verifier_model_name: deepseek-v4-flash
+  experience_model_name: deepseek-v4-flash
   experience_embedding_model: text-embedding-3-small
 
 baseline:
@@ -29,7 +22,13 @@ baseline:
   enable_function_calling: false
 
 runtime:
-  num_workers: 12
+  num_workers: 20
 
 rollout:
   per_sample: 4
+  max_tokens: 8192
+
+api:
+  openai_api_key:  sk-rKFPCD23jeyOnfWiP5QjCwiiTrKnbJrYV02M5utDsqpf0JUt
+  # openai_api_key: sk-wsUqriC2NjivVMqbegcpUNZXL2yqDYo2Ph34bomOFNJ1oOq9
+  openai_base_url: "https://card.nassaapi.xyz/v1"

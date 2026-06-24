@@ -24,6 +24,7 @@ rollout:
   per_sample: 4
   summary_image_budget: 12
   summary_tool_images_per_rollout: 3
+  max_tokens: 8192
 
 validation:
   final_select_best: true
@@ -37,8 +38,8 @@ experience:
   image_caption_workers: 4
 
   library:
-    merge_similarity_threshold: 0.70
-    reduction_similarity_threshold: 0.60
+    merge_similarity_threshold: 0.7
+    reduction_similarity_threshold: 0.6
     similarity_top_k: 10
     reduction_max_rounds: 3
 
@@ -70,3 +71,10 @@ failure_recovery:
   max_llm_calls: 1
   max_candidates: 1
   success_candidates: 3
+
+api:
+  openai_api_key: sk-RTh8OS_N-_Ulz16GFQTY5Q
+  openai_base_url: "https://api.llm.ustc.edu.cn/v1"
+  serpapi_key: 39ed7c9f34a2bc6b3bd4c0007cd6074d63355845
+  jina_api_key: jina_70def61533ae4c51a69bc208606dc05domvCXdrHgUf9eyj9TtfFlc0_lUwx
+  jina_proxy: "http://127.0.0.1:7890"

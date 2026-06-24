@@ -8,17 +8,17 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from dotenv import load_dotenv
 
 
 VALID_MODES = {"train", "val", "test", "train_test", "train_val", "train_val_test"}
 CONFIG_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = CONFIG_DIR.parent
 RUNTIME_CONFIG_PATH = CONFIG_DIR / "runtime.yaml"
-ENV_FILE_PATH = CONFIG_DIR / ".env"
 _ACTIVE_RUNTIME_CONFIG: RuntimeConfig | None = None
 
 REQUIRED_ENV_KEYS = (
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
     "REASONING_MODEL_NAME",
     "VERIFIER_MODEL_NAME",
     "EXPERIENCE_MODEL_NAME",
@@ -136,14 +136,10 @@ def _load_runtime_paths(root: Path, payload: dict[str, Any], source: Path) -> Ru
     )
 
 
-def _load_api_env(env_file: Path) -> tuple[str, str, str]:
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-    base_url = os.environ.get("OPENAI_BASE_URL", "").rstrip("/")
-    chat_url = f"{base_url}/chat/completions" if base_url else ""
-    if not api_key:
-        raise RuntimeError(f"OPENAI_API_KEY is not set. Put it in {env_file}.")
-    if not base_url:
-        raise ValueError("OPENAI_BASE_URL must be set in .env.")
+def _openai_api_config() -> tuple[str, str, str]:
+    api_key = os.environ["OPENAI_API_KEY"]
+    base_url = os.environ["OPENAI_BASE_URL"].rstrip("/")
+    chat_url = f"{base_url}/chat/completions"
     os.environ["OPENAI_BASE_URL"] = base_url
     os.environ["OPENAI_API_BASE"] = base_url
     os.environ["OPENAI_CHAT_COMPLETIONS_URL"] = chat_url
@@ -171,7 +167,7 @@ def _flatten_compat_env(settings: dict[str, Any]) -> dict[str, str]:
         env[env_key] = _env_value(value)
 
     for section, values in settings.items():
-        prefix = () if section in {"runtime", "models"} else (section,)
+        prefix = () if section in {"runtime", "models", "api"} else (section,)
         visit(prefix, values)
 
     for generated_name, legacy_name in COMPAT_ENV_ALIASES.items():
@@ -231,12 +227,11 @@ def _apply_api_defaults(api_key: str, openai_base_url: str, chat_url: str) -> No
         "EXPERIENCE_EMBEDDING_ENDPOINT": openai_base_url,
     }
     for key, value in defaults.items():
-        os.environ.setdefault(key, value)
+        os.environ[key] = value
 
 
 def apply_runtime_env(runtime: RuntimeConfig) -> None:
     """Populate environment variables consumed by legacy runtime modules."""
-    api_key, openai_base_url, chat_url = _load_api_env(ENV_FILE_PATH)
     os.environ.update(_path_env(runtime.paths))
     os.environ.update(runtime.compat_env)
 
@@ -244,6 +239,7 @@ def apply_runtime_env(runtime: RuntimeConfig) -> None:
     if missing:
         raise ValueError(f"Missing required runtime env values in {RUNTIME_CONFIG_PATH}: {', '.join(missing)}")
 
+    api_key, openai_base_url, chat_url = _openai_api_config()
     _apply_api_defaults(api_key, openai_base_url, chat_url)
 
 
@@ -253,7 +249,6 @@ def load_runtime_config() -> RuntimeConfig:
     config_path = RUNTIME_CONFIG_PATH
     payload = _load_runtime_payload(config_path)
     root = PROJECT_ROOT
-    load_dotenv(ENV_FILE_PATH, override=True)
     paths = _load_runtime_paths(root, payload, config_path)
     paths = _apply_run_root_override(root, paths)
 

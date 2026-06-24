@@ -52,6 +52,7 @@ class _MemoryPaths:
 class _ExecutionSettings:
     num_workers: int
     rollouts_per_sample: int
+    max_tokens: int
     system_prompts_path: str
     tool_config_path: str
     experience_large_batch: int
@@ -73,6 +74,7 @@ class _ExecutionSettings:
         return cls(
             num_workers=num_workers,
             rollouts_per_sample=_setting_int(settings, "rollout.per_sample"),
+            max_tokens=_setting_int(settings, "rollout.max_tokens"),
             system_prompts_path=str(ctx.system_prompts),
             tool_config_path=str(ctx.tool_config),
             experience_large_batch=_setting_int(settings, "experience.large_batch"),
