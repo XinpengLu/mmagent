@@ -1,7 +1,8 @@
 mode: test
 
 benchmarks:
-  - TIR-Bench
+  - MMBrowseComp
+  - MMSearch-Plus
 
 paths:
   benchmark_processed: benchmark/processed
@@ -29,7 +30,7 @@ baseline:
   enable_function_calling: true
 
 runtime:
-  num_workers: 8
+  num_workers: 12
 
 rollout:
   per_sample: 4

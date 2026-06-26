@@ -7,6 +7,7 @@ from PIL import Image
 from .config import ExperienceLLMSettings
 from .utils import image_to_base64
 from utils.api_usage_logger import log_api_usage
+from utils.key_pool import openai_should_rotate, rotate_current_key
 
 
 def is_openai_reasoning_model(model_name: str) -> bool:
@@ -139,6 +140,10 @@ class ExperienceLLM:
                 else:
                     last_error = self.response_error_message(api_name, resp, attempt, max_retries)
                     print(last_error)
+                    if openai_should_rotate(resp.status_code, last_error):
+                        api_key = rotate_current_key("openai", api_key)
+                        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
+                        continue
                     if resp.status_code in {400, 401, 403, 404}:
                         raise RuntimeError(last_error)
                     if resp.status_code >= 500 and attempt < max_retries:

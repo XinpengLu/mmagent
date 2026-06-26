@@ -6,7 +6,7 @@ import random
 import json
 import requests
 from utils.api_usage_logger import log_api_usage
-from utils.key_pool import openai_should_rotate, retire_current_key
+from utils.key_pool import openai_should_rotate, rotate_current_key
 
 NON_RETRYABLE_STATUS_CODES = {400, 401, 403, 404}
 API_TIMEOUT_SECONDS = 240
@@ -83,8 +83,6 @@ def _make_api_request(end_point: str, headers: dict, payload: dict, api_name: st
             json=payload,
             timeout=API_TIMEOUT_SECONDS,
         )
-        if response.status_code == 429:
-            return response, "429"
         return response, None
     except requests.exceptions.Timeout:
         print(f"[{api_name}] API timeout")
@@ -327,7 +325,7 @@ def _try_single_api(api_key: str, end_point: str, model_name: str, messages: lis
 
         if response.status_code == 429:
             if openai_should_rotate(response.status_code, _response_error_message(response)):
-                api_key = retire_current_key("openai", api_key)
+                api_key = rotate_current_key("openai", api_key)
                 continue
             should_retry, last_error = _retry_after_rate_limit(api_name, attempt, max_retries)
             if should_retry:
@@ -339,7 +337,7 @@ def _try_single_api(api_key: str, end_point: str, model_name: str, messages: lis
             return result, None
 
         if error_type == "http_error" and openai_should_rotate(response.status_code, _response_error_message(response)):
-            api_key = retire_current_key("openai", api_key)
+            api_key = rotate_current_key("openai", api_key)
             continue
 
         should_retry, last_error = _retry_after_parse_error(response, api_name, error_type, attempt, max_retries)

@@ -13,6 +13,7 @@ from typing import Tuple, List, Optional, Dict
 
 from prompts.judge_templates import SYSTEM_PROMPT, QUERY_PROMPT
 from utils.api_usage_logger import log_api_usage
+from utils.key_pool import openai_should_rotate, rotate_current_key
 
 
 # Global client instance (lazily initialized)
@@ -101,19 +102,23 @@ class LLMJudgeClient:
 
     def __init__(self):
         """Initialize the LLM judge client with environment variables."""
-        api_key = os.environ.get("VERIFIER_API_KEY")
-        endpoint = os.environ.get("VERIFIER_END_POINT")
+        self.api_key = os.environ.get("VERIFIER_API_KEY")
+        self.endpoint = os.environ.get("VERIFIER_END_POINT")
         self.model_name = os.environ.get("VERIFIER_MODEL_NAME")
         
-        if not api_key or not endpoint:
+        if not self.api_key or not self.endpoint:
             raise ValueError(
                 "VERIFIER_API_KEY and VERIFIER_END_POINT must be set in environment variables"
             )
         
-        self.client = openai.OpenAI(
-            base_url=endpoint,
-            api_key=api_key,
-        )
+        self._build_client()
+
+    def _build_client(self) -> None:
+        self.client = openai.OpenAI(base_url=self.endpoint, api_key=self.api_key)
+
+    def _rotate_api_key(self) -> None:
+        self.api_key = rotate_current_key("openai", self.api_key)
+        self._build_client()
 
     def evaluate(
         self, 
@@ -157,16 +162,20 @@ class LLMJudgeClient:
                 return _score_from_response_text(response_text), response_text
                 
             except openai.RateLimitError as e:
+                error_text = str(e)
                 log_api_usage(
                     source="Verifier API",
                     model=self.model_name,
                     endpoint=os.environ.get("VERIFIER_END_POINT", ""),
                     payload={"messages": messages},
                     success=False,
-                    error=str(e),
+                    error=error_text,
                     attempt=attempt + 1,
                 )
-                print(f"[RateLimitError] Attempt {attempt + 1}/{max_retries}: {str(e)}")
+                print(f"[RateLimitError] Attempt {attempt + 1}/{max_retries}: {error_text}")
+                if openai_should_rotate(getattr(e, "status_code", None), error_text):
+                    self._rotate_api_key()
+                    continue
                 time.sleep(min(3 * (attempt + 1), 10))
                 continue
                 
@@ -182,6 +191,9 @@ class LLMJudgeClient:
                 )
                 error_code = getattr(e, 'status_code', None) or getattr(e, 'code', None)
                 print(f"[APIError] Attempt {attempt + 1}/{max_retries}: {str(e)} (code: {error_code})")
+                if openai_should_rotate(error_code, str(e)):
+                    self._rotate_api_key()
+                    continue
                 if error_code in {401, 403}:
                     break
                 if attempt < max_retries - 1:

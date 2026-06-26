@@ -29,9 +29,10 @@ KEY_FILE_ENV = {
 }
 
 OPENAI_ROTATE_MARKERS = (
-    "429",
-    "rate_limit_exceeded",
     "每小时请求数已达上限",
+    "requests per hour",
+    "hourly request",
+    "request quota",
     "quota",
     "insufficient_quota",
     "credit",
@@ -103,6 +104,35 @@ def apply_key(pool: str, key: str) -> None:
         os.environ[env_name] = key
 
 
+def _masked_key(key: str | None) -> str:
+    if key and len(key) > 10:
+        return f"{key[:6]}...{key[-4:]}"
+    return "<current>"
+
+
+def rotate_current_key(pool: str, current_key: str | None = None) -> str:
+    """Move a temporarily limited key to the end of the file and use the next key."""
+    path = _key_file(pool)
+    if path is None:
+        return ""
+
+    with _LOCK:
+        keys = _read_keys(path)
+        if not keys:
+            raise RuntimeError(f"No usable {pool} key left in {path}")
+
+        rotated_key = current_key if current_key in keys else keys[0]
+        if len(keys) > 1:
+            keys.remove(rotated_key)
+            keys.append(rotated_key)
+            path.write_text("\n".join(keys) + "\n", encoding="utf-8")
+        next_key = keys[0]
+
+    apply_key(pool, next_key)
+    print(f"[KeyPool] Rotated {pool} key {_masked_key(rotated_key)}; switched to next key.")
+    return next_key
+
+
 def retire_current_key(pool: str, exhausted_key: str | None = None) -> str:
     path = _key_file(pool)
     if path is None:
@@ -120,8 +150,7 @@ def retire_current_key(pool: str, exhausted_key: str | None = None) -> str:
         next_key = keys[0]
 
     apply_key(pool, next_key)
-    masked = f"{exhausted_key[:6]}...{exhausted_key[-4:]}" if exhausted_key and len(exhausted_key) > 10 else "<current>"
-    print(f"[KeyPool] Retired {pool} key {masked}; switched to next key.")
+    print(f"[KeyPool] Retired {pool} key {_masked_key(exhausted_key)}; switched to next key.")
     return next_key
 
 
