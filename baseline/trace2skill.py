@@ -53,7 +53,7 @@ def _chat_text(model_name: str, system_prompt: str, user_prompt: str, max_tokens
 
 
 def _trace2skill_root(args) -> Path:
-    return Path(args.output_dir).parent
+    return Path(args.train_output_dir)
 
 
 def _local_lessons_path(args) -> Path:
@@ -93,20 +93,16 @@ def _extract_local_lessons(sample: dict[str, Any], result: dict[str, Any], args,
 
 
 def _collect_local_lessons(config, args) -> list[dict[str, Any]]:
+    train_file = Path(args.input_file).parent / "train.json"
     lesson_path = _local_lessons_path(args)
     if lesson_path.exists():
         return list(read_json(lesson_path).get("lessons", []))
 
-    train_file = Path(args.input_file).parent / "train.json"
-    if not train_file.exists():
-        print(f"[Trace2Skill] No train split for {train_file.parent.name}; using empty skill guide.")
-        write_json(lesson_path, {"lessons": []}, indent=2)
-        return []
-
     train_data = json.loads(train_file.read_text(encoding="utf-8"))[: int(args.trace2skill_train_samples)]
     train_args = SimpleNamespace(**vars(args))
+    train_args.phase = "train"
     train_args.input_file = str(train_file)
-    train_args.output_dir = str(_trace2skill_root(args) / "train_trace_collection")
+    train_args.output_dir = str(_trace2skill_root(args))
     train_args.rollouts_per_sample = 1
     train_args.num_workers = 1
     train_args._sample_system_prompt = config.base_system_prompt

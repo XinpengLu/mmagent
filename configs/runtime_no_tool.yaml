@@ -12,8 +12,6 @@ paths:
 models:
   reasoning_model_name: deepseek-v4-flash
   verifier_model_name: deepseek-v4-flash
-  experience_model_name: deepseek-v4-flash
-  experience_embedding_model: text-embedding-3-small
 
 baseline:
   name: no_tool

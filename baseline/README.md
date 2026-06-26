@@ -33,7 +33,7 @@ Intermediate files:
 
 ## ExpeL
 
-Uses the same benchmark-specific tool set as `with_tool`. For benchmarks with a `train.json` split, it first runs a lightweight training pass to extract reusable ExpeL-style rules, then retrieves top-k rules for each test sample and injects them into the prompt. For OOD-only benchmarks without `train.json`, it runs with an empty rule memory.
+Uses the same benchmark-specific tool set as `with_tool`. It first runs a lightweight training pass on the benchmark's `train.json` split to extract reusable ExpeL-style rules, then retrieves top-k rules for each test sample and injects them into the prompt.
 
 ```bash
 python -m baseline.run --config configs/runtime_expel_qwen.yaml
@@ -41,13 +41,13 @@ python -m baseline.run --config configs/runtime_expel_qwen.yaml
 
 Intermediate files:
 
-- `train_rule_extraction/`: one training rollout per sampled train item.
-- `expel_rules.json`: extracted reusable rules for that benchmark.
-- `expel_selected_rules.json`: rules retrieved for each test sample.
+- `train/`: one training rollout per sampled train item.
+- `train/expel_rules.json`: extracted reusable rules for that benchmark.
+- `test/*/expel_selected_rules.json`: rules retrieved for each test sample.
 
 ## Trace2Skill
 
-Uses the same benchmark-specific tool set as `with_tool`. For benchmarks with a `train.json` split, it first runs one training rollout per sampled train item, distills trajectory-local lessons, consolidates them into one global skill guide, and injects that guide into every test rollout. For OOD-only benchmarks without `train.json`, it falls back to the tool baseline with an empty guide.
+Uses the same benchmark-specific tool set as `with_tool`. It first runs one training rollout per sampled train item from `train.json`, distills trajectory-local lessons, consolidates them into one global skill guide, and injects that guide into every test rollout.
 
 ```bash
 python -m baseline.run --config configs/runtime_trace2skill_qwen.yaml
@@ -55,9 +55,9 @@ python -m baseline.run --config configs/runtime_trace2skill_qwen.yaml
 
 Intermediate files:
 
-- `train_trace_collection/`: one training rollout per sampled train item.
-- `trace2skill_local_lessons.json`: local lessons distilled from training trajectories.
-- `trace2skill_guide.md`: consolidated global skill guide injected at test time.
+- `train/`: one training rollout per sampled train item.
+- `train/trace2skill_local_lessons.json`: local lessons distilled from training trajectories.
+- `train/trace2skill_guide.md`: consolidated global skill guide injected at test time.
 
 For a quick smoke test:
 

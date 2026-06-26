@@ -172,6 +172,7 @@ def _build_args(runtime: RuntimeConfig, benchmark: str, max_samples: int | None)
     system_prompt, enabled_tools = _baseline_prompt_and_tools(benchmark, settings)
     data_path = paths.split_root / benchmark / "test.json"
     output_dir = paths.output_root / benchmark / "test"
+    baseline_name = str(settings["baseline"]["name"])
     args = SimpleNamespace(
         phase="test",
         input_file=str(data_path),
@@ -189,6 +190,8 @@ def _build_args(runtime: RuntimeConfig, benchmark: str, max_samples: int | None)
         experience_library="",
         skill_library="",
     )
+    if baseline_name in {"expel", "trace2skill"}:
+        args.train_output_dir = str(paths.output_root / benchmark / "train")
     for key, value in settings.get("baseline", {}).items():
         if key not in BASELINE_CONFIG_ONLY_FIELDS:
             setattr(args, key, value)

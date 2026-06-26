@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -61,6 +62,32 @@ JINA_ROTATE_MARKERS = (
 )
 
 
+@contextmanager
+def _locked_key_file(path: Path):
+    """Serialize key-file updates across benchmark processes."""
+    lock_path = Path(f"{path}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        if os.name == "nt":
+            import msvcrt
+
+            lock_file.seek(0)
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
 def resolve_key_file(raw_path: str | None) -> Path | None:
     if not raw_path:
         return None
@@ -90,7 +117,7 @@ def current_key(pool: str) -> str:
     path = _key_file(pool)
     if path is None:
         return ""
-    with _LOCK:
+    with _LOCK, _locked_key_file(path):
         keys = _read_keys(path)
         if not keys:
             raise RuntimeError(f"No usable {pool} key left in {path}")
@@ -116,17 +143,24 @@ def rotate_current_key(pool: str, current_key: str | None = None) -> str:
     if path is None:
         return ""
 
-    with _LOCK:
+    with _LOCK, _locked_key_file(path):
         keys = _read_keys(path)
         if not keys:
             raise RuntimeError(f"No usable {pool} key left in {path}")
 
-        rotated_key = current_key if current_key in keys else keys[0]
-        if len(keys) > 1:
+        if current_key and current_key not in keys:
+            rotated_key = current_key
+            next_key = keys[0]
+            changed = False
+        else:
+            rotated_key = current_key if current_key in keys else keys[0]
+            changed = len(keys) > 1
+
+        if changed:
             keys.remove(rotated_key)
             keys.append(rotated_key)
             path.write_text("\n".join(keys) + "\n", encoding="utf-8")
-        next_key = keys[0]
+            next_key = keys[0]
 
     apply_key(pool, next_key)
     print(f"[KeyPool] Rotated {pool} key {_masked_key(rotated_key)}; switched to next key.")
@@ -138,13 +172,21 @@ def retire_current_key(pool: str, exhausted_key: str | None = None) -> str:
     if path is None:
         return ""
 
-    with _LOCK:
+    with _LOCK, _locked_key_file(path):
         keys = _read_keys(path)
         if exhausted_key and exhausted_key in keys:
             keys.remove(exhausted_key)
+            path.write_text("\n".join(keys) + ("\n" if keys else ""), encoding="utf-8")
+        elif exhausted_key:
+            if not keys:
+                raise RuntimeError(f"No usable {pool} key left in {path}")
+            next_key = keys[0]
+            apply_key(pool, next_key)
+            print(f"[KeyPool] {pool} key {_masked_key(exhausted_key)} was already retired; using current key.")
+            return next_key
         elif keys:
             keys.pop(0)
-        path.write_text("\n".join(keys) + ("\n" if keys else ""), encoding="utf-8")
+            path.write_text("\n".join(keys) + ("\n" if keys else ""), encoding="utf-8")
         if not keys:
             raise RuntimeError(f"No usable {pool} key left in {path}")
         next_key = keys[0]
@@ -161,7 +203,7 @@ def openai_should_rotate(status_code: int | None, message: str) -> bool:
 
 def serp_should_rotate(status_code: int | None, message: str) -> bool:
     text = f"{status_code or ''} {message or ''}".lower()
-    return status_code in {401, 402, 403, 429} or any(marker in text for marker in SERP_ROTATE_MARKERS)
+    return status_code in {401, 402, 403} or any(marker in text for marker in SERP_ROTATE_MARKERS)
 
 
 def jina_should_rotate(status_code: int | None, message: str) -> bool:

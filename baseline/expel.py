@@ -78,24 +78,21 @@ def _extract_rules_from_result(sample: dict[str, Any], result: dict[str, Any], a
 
 
 def _expel_rule_path(args) -> Path:
-    return Path(args.output_dir).parent / "expel_rules.json"
+    return Path(args.train_output_dir) / "expel_rules.json"
 
 
 def _build_expel_rules(config, args) -> list[dict[str, Any]]:
+    train_file = Path(args.input_file).parent / "train.json"
     rule_path = _expel_rule_path(args)
     if rule_path.exists():
         return list(read_json(rule_path).get("rules", []))
 
-    train_file = Path(args.input_file).parent / "train.json"
-    if not train_file.exists():
-        print(f"[ExpeL] No train split for {train_file.parent.name}; using empty rule memory.")
-        write_json(rule_path, {"rules": []}, indent=2)
-        return []
     train_data = json.loads(train_file.read_text(encoding="utf-8"))[: int(args.expel_train_samples)]
 
     train_args = SimpleNamespace(**vars(args))
+    train_args.phase = "train"
     train_args.input_file = str(train_file)
-    train_args.output_dir = str(Path(args.output_dir).parent / "train_rule_extraction")
+    train_args.output_dir = str(Path(args.train_output_dir))
     train_args.rollouts_per_sample = 1
     train_args.num_workers = 1
     train_args._sample_system_prompt = config.base_system_prompt

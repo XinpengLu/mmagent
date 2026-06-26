@@ -12,8 +12,6 @@ paths:
 models:
   reasoning_model_name: qwen3.6-chat
   verifier_model_name: qwen-chat
-  experience_model_name: qwen3.6-chat
-  experience_embedding_model: text-embedding-3-small
 
 baseline:
   name: with_tool
@@ -33,7 +31,7 @@ rollout:
   max_tokens: 8192
 
 api:
-  openai_key_file: configs/keys/openai.keys
+  openai_key_file: configs/keys/qwen_openai.keys
   openai_base_url: "https://api.llm.ustc.edu.cn/v1"
   serpapi_key_file: configs/keys/serp.keys
   jina_key_file: configs/keys/jina.keys
