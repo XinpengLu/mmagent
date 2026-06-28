@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from engine.api_caller import call_vision_api
@@ -118,44 +119,74 @@ def _run_rollout(sample, args, sampling_params, rollout_idx: int) -> dict[str, A
     return result
 
 
-def run_reflexion_benchmark(config, args) -> list[dict[str, Any]]:
-    """Run sequential rollouts, reflecting after failed attempts."""
-    all_results: list[dict[str, Any]] = []
-    base_prompt = config.base_system_prompt
+def _run_reflexion_sample(
+    sample_idx: int,
+    sample: dict[str, Any],
+    total_samples: int,
+    args,
+    sampling_params: dict[str, Any],
+    base_prompt: str,
+) -> tuple[int, list[dict[str, Any]]]:
+    question_id = _question_id(sample, sample_idx)
+    sample_dir = Path(args.output_dir) / question_id
+    sample_dir.mkdir(parents=True, exist_ok=True)
+    sample_results, pending = _load_completed_rollouts(sample_dir, args.rollouts_per_sample)
 
-    for sample_idx, sample in enumerate(config.data):
-        question_id = _question_id(sample, sample_idx)
-        sample_dir = Path(args.output_dir) / question_id
-        sample_dir.mkdir(parents=True, exist_ok=True)
-        sample_results, pending = _load_completed_rollouts(sample_dir, args.rollouts_per_sample)
-        if not pending:
-            print(f"[Reflexion] Sample {sample_idx + 1}/{len(config.data)} {question_id}: already completed.")
-            compute_and_save_sample_summary(question_id, sample_results, args.rollouts_per_sample, sample_dir)
-            all_results.extend(sample_results)
+    if not pending:
+        print(f"[Reflexion] Sample {sample_idx + 1}/{total_samples} {question_id}: already completed.")
+        compute_and_save_sample_summary(question_id, sample_results, args.rollouts_per_sample, sample_dir)
+        return sample_idx, sample_results
+
+    reflections: list[str] = []
+    sample_results_by_idx = {int(r["_rollout_idx"]): r for r in sample_results}
+    for rollout_idx in pending:
+        print(f"[Reflexion] Sample {sample_idx + 1}/{total_samples} {question_id}: rollout {rollout_idx}")
+        args._sample_system_prompt = _format_reflections(reflections) + base_prompt
+        result = _run_rollout(sample, args, sampling_params, rollout_idx)
+        if not result or result_has_transient_failure(result):
             continue
 
-        reflections: list[str] = []
-        sample_results_by_idx = {int(r["_rollout_idx"]): r for r in sample_results}
-        for rollout_idx in pending:
-            print(f"[Reflexion] Sample {sample_idx + 1}/{len(config.data)} {question_id}: rollout {rollout_idx}")
-            args._sample_system_prompt = _format_reflections(reflections) + base_prompt
-            result = _run_rollout(sample, args, config.sampling_params, rollout_idx)
-            if not result or result_has_transient_failure(result):
-                continue
-            sample_results_by_idx[rollout_idx] = result
-            if float(result.get("accuracy_score", 0.0) or 0.0) < 1.0 and rollout_idx < args.rollouts_per_sample - 1:
-                reflection = _chat_text(
-                    args.model_name,
-                    REFLEXION_SYSTEM_PROMPT,
-                    _reflection_prompt(sample, result, _rollout_dir(args.output_dir, question_id, rollout_idx, args.rollouts_per_sample)),
-                    max_tokens=int(args.reflection_max_tokens),
-                )
-                if reflection:
-                    reflections.append(reflection)
-                    write_json(sample_dir / "reflexion_memory.json", {"reflections": reflections}, indent=2)
+        sample_results_by_idx[rollout_idx] = result
+        if float(result.get("accuracy_score", 0.0) or 0.0) < 1.0 and rollout_idx < args.rollouts_per_sample - 1:
+            reflection = _chat_text(
+                args.model_name,
+                REFLEXION_SYSTEM_PROMPT,
+                _reflection_prompt(sample, result, _rollout_dir(args.output_dir, question_id, rollout_idx, args.rollouts_per_sample)),
+                max_tokens=int(args.reflection_max_tokens),
+            )
+            if reflection:
+                reflections.append(reflection)
+                write_json(sample_dir / "reflexion_memory.json", {"reflections": reflections}, indent=2)
 
-        ordered_results = [sample_results_by_idx[idx] for idx in sorted(sample_results_by_idx)]
-        compute_and_save_sample_summary(question_id, ordered_results, args.rollouts_per_sample, sample_dir)
-        all_results.extend(ordered_results)
+    ordered_results = [sample_results_by_idx[idx] for idx in sorted(sample_results_by_idx)]
+    compute_and_save_sample_summary(question_id, ordered_results, args.rollouts_per_sample, sample_dir)
+    return sample_idx, ordered_results
 
+
+def run_reflexion_benchmark(config, args) -> list[dict[str, Any]]:
+    """Run Reflexion with parallel samples and sequential rollouts per sample."""
+    total_samples = len(config.data)
+    max_workers = max(1, min(int(args.num_workers), total_samples))
+    sample_outputs: dict[int, list[dict[str, Any]]] = {}
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(
+                _run_reflexion_sample,
+                sample_idx,
+                sample,
+                total_samples,
+                SimpleNamespace(**vars(args)),
+                config.sampling_params,
+                config.base_system_prompt,
+            )
+            for sample_idx, sample in enumerate(config.data)
+        ]
+        for future in as_completed(futures):
+            sample_idx, results = future.result()
+            sample_outputs[sample_idx] = results
+
+    all_results: list[dict[str, Any]] = []
+    for sample_idx in sorted(sample_outputs):
+        all_results.extend(sample_outputs[sample_idx])
     return all_results

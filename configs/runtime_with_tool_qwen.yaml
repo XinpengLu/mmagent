@@ -1,7 +1,9 @@
 mode: test
 
 benchmarks:
-  - TIR-Bench
+  - MMSearch-Plus
+  - MMBrowseComp
+  - AgentVista
 
 paths:
   benchmark_processed: benchmark/processed

@@ -25,7 +25,7 @@ BENCHMARKS = [
     "Agentic-MME",
 ]
 DEFAULT_MODELS = ["gpt-5.5", "qwen3.6-chat", "deepseek-v4-flash"]
-DEFAULT_METHODS = ["no_tool", "with_tool"]
+DEFAULT_METHODS = ["no_tool", "with_tool", "reflexion"]
 METHOD_LABELS = {
     "no_tool": "No Tool",
     "with_tool": "With Tool",
