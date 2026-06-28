@@ -10,7 +10,6 @@ benchmark_full/
 configs/runtime.local.yaml
 configs/runtime.local.yml
 configs/runtime.local.toml
-configs/keys/
 xskill_paper_tmp.txt
 
 # Python cache files
