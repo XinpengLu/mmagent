@@ -5,12 +5,18 @@ testing, memory learning, and benchmark reporting.
 
 ## Recommended Commands
 
-Use the single unified runner:
+Create the Python environment once, then install the project dependencies:
 
 ```bash
 cd /mnt/f/XSkill/mmagent
+
+conda create -n xskill python=3.11 -y
 conda activate xskill
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 ```
+
+After the environment is ready, use the single unified runner.
 
 `run_full_benchmark.sh` assumes the Python environment is already active.
 Runtime mode, benchmark list, paths, and defaults are loaded from
