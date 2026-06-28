@@ -1,7 +1,6 @@
 mode: test
 
 benchmarks:
-  - MMSearch-Plus
   - BrowseComp-V3
   - AgentVista
   - MMBrowseComp

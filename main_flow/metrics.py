@@ -35,6 +35,16 @@ def compute_and_save_sample_summary(question_id, sample_rollout_results, rollout
     """Compute sample-level pass@k, average@k, and rollout diagnostics."""
     if not sample_rollout_results:
         return None
+    if len(sample_rollout_results) < rollouts_per_sample:
+        summary_path = os.path.join(sample_dir, SAMPLE_SUMMARY_FILENAME)
+        if os.path.exists(summary_path):
+            os.remove(summary_path)
+        print(
+            f"  \nSample {question_id}: "
+            f"{len(sample_rollout_results)}/{rollouts_per_sample} valid rollout(s); "
+            "sample summary not written and will be completed on resume."
+        )
+        return None
 
     sorted_results = (
         sorted(sample_rollout_results, key=lambda r: r.get("_rollout_idx", 0))

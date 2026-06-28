@@ -302,6 +302,8 @@ def _run_expel_test_sample(
 
     ordered_results = [sample_results_by_idx[idx] for idx in sorted(sample_results_by_idx)]
     compute_and_save_sample_summary(question_id, ordered_results, args.rollouts_per_sample, sample_dir)
+    if len(ordered_results) < args.rollouts_per_sample:
+        return sample_idx, []
     return sample_idx, ordered_results
 
 

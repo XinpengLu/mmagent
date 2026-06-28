@@ -96,18 +96,22 @@ def _rollout_output_dir(output_dir, question_id, rollout_idx, rollouts_per_sampl
     return os.path.join(sample_dir, f"rollout_{rollout_idx}") if rollouts_per_sample > 1 else sample_dir
 
 
-def _sample_rollout_info(sample, sample_idx, question_id, sample_dir, sample_rollout_results):
+def _sample_rollout_info(sample, sample_idx, question_id, sample_dir, sample_rollout_results, expected_rollouts):
     return {
         'sample': sample,
         'sample_idx': sample_idx,
         'question_id': question_id,
         'sample_dir': sample_dir,
         'sample_rollout_results': sample_rollout_results,
+        'expected_rollouts': expected_rollouts,
     }
 
 
 def _record_sample_info(all_results, sample_info):
     if not sample_info or not sample_info.get('sample_rollout_results'):
+        return False
+    expected_rollouts = int(sample_info.get('expected_rollouts') or 0)
+    if expected_rollouts and len(sample_info['sample_rollout_results']) < expected_rollouts:
         return False
     all_results.extend(sample_info['sample_rollout_results'])
     return True
@@ -115,6 +119,13 @@ def _record_sample_info(all_results, sample_info):
 
 def _finalize_sample(sample, sample_dir, question_id, results, args, *, update_memory_usage=True):
     if not results:
+        return
+    if len(results) < args.rollouts_per_sample:
+        print(
+            f"  [Pipeline] Sample {question_id}: "
+            f"{len(results)}/{args.rollouts_per_sample} valid rollout(s); "
+            "leaving sample unfinished for checkpoint resume."
+        )
         return
 
     compute_and_save_sample_summary(
@@ -168,10 +179,12 @@ def _run_rollout_until_valid(sample, args, sampling_params, rollout_idx, run_sin
                 time.sleep(wait_seconds)
 
     clean_rollout_artifacts(_rollout_output_dir(args.output_dir, question_id, rollout_idx, args.rollouts_per_sample))
-    raise RuntimeError(
-        f"Sample {question_id} rollout {rollout_idx} still has transient failure "
-        f"after {max_attempts} attempt(s): {last_reason}"
+    print(
+        f"  [Pipeline] Sample {question_id} rollout {rollout_idx}: "
+        f"still has transient failure after {max_attempts} attempt(s): {last_reason}. "
+        "Leaving this rollout unfinished for checkpoint resume."
     )
+    return None
 
 
 def _count_trajectory_turns(path):
@@ -289,10 +302,10 @@ def _pending_pipeline_samples(samples, sample_indices, sample_results_dict, args
         )
         if completed_rollouts:
             sample_results_dict[actual_sample_idx]['results'].extend(completed_rollouts)
-            if all_results_list is not None:
-                all_results_list.extend(completed_rollouts)
         if skip_sample:
             _finalize_sample(sample, sample_dir, question_id, completed_rollouts, args, update_memory_usage=False)
+            if all_results_list is not None:
+                all_results_list.extend(completed_rollouts)
             continue
         pending_samples.append({
             'sample_idx': actual_sample_idx,
@@ -463,12 +476,18 @@ def _handle_rollout_future(
         if result:
             result['_rollout_idx'] = rollout_idx
             sample_results_dict[actual_sample_idx]['results'].append(result)
-            if all_results_list is not None:
-                all_results_list.append(result)
     except Exception as e:
         raise RuntimeError(
             f"Rollout {rollout_idx} for sample {actual_sample_idx} failed: {e}"
         ) from e
+
+    if not result:
+        question_id = sample_results_dict[actual_sample_idx]['question_id']
+        print(
+            f"  [Pipeline] Sample {question_id} rollout {rollout_idx}: "
+            "not completed in this run; it will be retried on resume."
+        )
+        return
 
     state.rollout_counts.setdefault(actual_sample_idx, 0)
     state.rollout_counts[actual_sample_idx] += 1
@@ -478,6 +497,8 @@ def _handle_rollout_future(
         sample_results_dict,
         args,
     )
+    if actual_sample_idx in state.completed_samples and all_results_list is not None:
+        all_results_list.extend(sample_results_dict[actual_sample_idx]['results'])
 
 
 def _prepare_pipeline_run(samples, sample_indices, sample_results_dict, args, all_results_list, progress_desc):
@@ -656,7 +677,14 @@ class RolloutRunner:
                 sample_args,
                 update_memory_usage=False,
             )
-            return _sample_rollout_info(sample, sample_idx, question_id, sample_dir, sample_rollout_results)
+            return _sample_rollout_info(
+                sample,
+                sample_idx,
+                question_id,
+                sample_dir,
+                sample_rollout_results,
+                sample_args.rollouts_per_sample,
+            )
 
         if sample_rollout_results:
             print(
@@ -706,7 +734,14 @@ class RolloutRunner:
 
         _finalize_sample(sample, sample_dir, question_id, sample_rollout_results, sample_args)
 
-        return _sample_rollout_info(sample, sample_idx, question_id, sample_dir, sample_rollout_results)
+        return _sample_rollout_info(
+            sample,
+            sample_idx,
+            question_id,
+            sample_dir,
+            sample_rollout_results,
+            sample_args.rollouts_per_sample,
+        )
 
     def _pipeline_batch(self, batch_samples, batch_indices, progress_desc):
         batch_sample_results = {}
@@ -737,7 +772,7 @@ class RolloutRunner:
         for actual_sample_idx in batch_indices:
             if actual_sample_idx in batch_sample_results:
                 sample_info = batch_sample_results[actual_sample_idx]
-                if not sample_info.get('results'):
+                if len(sample_info.get('results') or []) < self.args.rollouts_per_sample:
                     continue
                 batch_sample_infos.append(
                     _sample_rollout_info(
@@ -746,6 +781,7 @@ class RolloutRunner:
                         sample_info['question_id'],
                         sample_info['sample_dir'],
                         sample_info['results'],
+                        self.args.rollouts_per_sample,
                     )
                 )
         return batch_sample_infos
