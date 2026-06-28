@@ -1,14 +1,8 @@
 mode: test
 
 benchmarks:
-  - TIR-Bench
-  - VisualToolBench
-  - MMSearch-Plus
   - BrowseComp-V3
-  - AgentVista
-  - MMBrowseComp
   - VisBrowse-Bench
-  - AgentVista
   - Agentic-MME
 
 paths:

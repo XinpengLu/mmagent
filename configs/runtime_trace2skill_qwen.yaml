@@ -8,7 +8,6 @@ benchmarks:
   - AgentVista
   - MMBrowseComp
   - VisBrowse-Bench
-  - AgentVista
   - Agentic-MME
 
 paths:

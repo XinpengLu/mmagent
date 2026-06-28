@@ -237,6 +237,44 @@ class APIToolHandler:
             'error': True,
         }
 
+    def _missing_required_argument(self, tool_name, parameters):
+        if not isinstance(parameters, dict):
+            return f"{tool_name} requires JSON object arguments."
+
+        if tool_name == "web_search" and not str(parameters.get("query") or "").strip():
+            return 'web_search requires a non-empty "query" argument.'
+        if tool_name == "visit" and not str(parameters.get("url") or "").strip():
+            return 'visit requires a non-empty "url" argument.'
+        if tool_name == "image_search":
+            has_query = bool(str(parameters.get("query") or "").strip())
+            has_image_url = bool(str(parameters.get("image_url") or "").strip())
+            if not (has_query or has_image_url):
+                return 'image_search requires a non-empty "query" or "image_url" argument.'
+        if tool_name in {"code_interpreter", "zoom"} and not str(parameters.get("code") or "").strip():
+            return f'{tool_name} requires a non-empty "code" argument.'
+        return None
+
+    def _invalid_tool_arguments_result(self, tool_name, parameters, node, turn_idx, tool_call_id):
+        reason = self._missing_required_argument(tool_name, parameters)
+        if not reason:
+            return None
+
+        feedback_msg = (
+            f"Invalid tool call: {reason}\n"
+            "Call the same tool again with valid arguments. Do not answer until the corrected tool call has been executed."
+        )
+        print(f"[Tool Call Rejected] {tool_name} with params: {parameters}. {reason}")
+        self._save_event(node, {
+            "turn_idx": turn_idx,
+            "tool_error": {
+                "tool_name": tool_name,
+                "parameters": parameters,
+                "error": reason,
+            },
+        })
+        self._record_tool_feedback(node, feedback_msg)
+        return self._error_result(feedback_msg, tool_call_id)
+
     def _limit_exceeded_result(self, tool_name, node, tool_call_id):
         tool_limit = self.tool_call_limits.get(tool_name, None)
         if tool_limit is None:
@@ -350,6 +388,12 @@ class APIToolHandler:
     def execute_tool_call(self, tool_name, parameters, node, turn_idx, tool_call_id=None):
         """Execute one tool call and return messages to append to the model history."""
         print(f"[Tool Call] {tool_name} with params: {parameters}")
+
+        invalid_arguments = self._invalid_tool_arguments_result(
+            tool_name, parameters, node, turn_idx, tool_call_id
+        )
+        if invalid_arguments:
+            return invalid_arguments
 
         limit_result = self._limit_exceeded_result(tool_name, node, tool_call_id)
         if limit_result:

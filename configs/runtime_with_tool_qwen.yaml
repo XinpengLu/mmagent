@@ -1,9 +1,8 @@
 mode: test
 
 benchmarks:
-  - MMSearch-Plus
-  - MMBrowseComp
-  - AgentVista
+  - VisBrowse-Bench
+  - Agentic-MME
 
 paths:
   benchmark_processed: benchmark/processed
