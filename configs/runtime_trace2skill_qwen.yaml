@@ -38,7 +38,7 @@ rollout:
   max_tokens: 8192
 
 api:
-  openai_key_file: configs/keys/openai.keys
+  openai_key_file: configs/keys/qwen_openai3.keys
   openai_base_url: "https://api.llm.ustc.edu.cn/v1"
   serpapi_key_file: configs/keys/serp.keys
   jina_key_file: configs/keys/jina.keys
