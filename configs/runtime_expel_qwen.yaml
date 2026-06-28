@@ -4,8 +4,12 @@ benchmarks:
   - TIR-Bench
   - VisualToolBench
   - MMSearch-Plus
-  - MMBrowseComp
+  - BrowseComp-V3
   - AgentVista
+  - MMBrowseComp
+  - VisBrowse-Bench
+  - AgentVista
+  - Agentic-MME
 
 paths:
   benchmark_processed: benchmark/processed
@@ -29,6 +33,9 @@ baseline:
   expel_train_samples: 100
   expel_max_rules: 20
   expel_rule_max_tokens: 512
+  reuse_train_benchmark_for_test_only:
+    MMBrowseComp: BrowseComp-V3
+    VisBrowse-Bench: BrowseComp-V3
 
 runtime:
   num_workers: 8

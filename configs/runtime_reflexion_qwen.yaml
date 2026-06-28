@@ -1,10 +1,15 @@
 mode: test
 
 benchmarks:
+  - TIR-Bench
   - VisualToolBench
   - MMSearch-Plus
-  - MMBrowseComp
+  - BrowseComp-V3
   - AgentVista
+  - MMBrowseComp
+  - VisBrowse-Bench
+  - AgentVista
+  - Agentic-MME
 
 paths:
   benchmark_processed: benchmark/processed

@@ -146,6 +146,11 @@ def _collect_local_lessons(config, args) -> list[dict[str, Any]]:
     lesson_path = _local_lessons_path(args)
     if lesson_path.exists():
         return list(read_json(lesson_path).get("memory_items", []))
+    if getattr(args, "reuse_train_benchmark", ""):
+        raise FileNotFoundError(
+            f"Missing reusable Trace2Skill memory items for {args.benchmark}: {lesson_path}. "
+            f"Run {args.reuse_train_benchmark} before {args.benchmark}."
+        )
 
     train_data = json.loads(train_file.read_text(encoding="utf-8"))[: int(args.trace2skill_train_samples)]
     train_args = SimpleNamespace(**vars(args))
@@ -212,7 +217,14 @@ def _consolidation_prompt(lesson_records: list[dict[str, Any]]) -> str:
 def _build_trace2skill_guide(config, args) -> str:
     guide_path = _guide_path(args)
     if guide_path.exists():
+        if getattr(args, "reuse_train_benchmark", ""):
+            print(f"[Trace2Skill] Reusing skill from {args.reuse_train_benchmark}: {guide_path}")
         return guide_path.read_text(encoding="utf-8")
+    if getattr(args, "reuse_train_benchmark", ""):
+        raise FileNotFoundError(
+            f"Missing reusable Trace2Skill skill for {args.benchmark}: {guide_path}. "
+            f"Run {args.reuse_train_benchmark} before {args.benchmark}."
+        )
 
     lesson_records = _collect_local_lessons(config, args)
     if not lesson_records:

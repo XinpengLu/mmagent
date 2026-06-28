@@ -227,10 +227,18 @@ def _run_expel_training_sample(
 def _build_expel_rules(config, args) -> list[dict[str, Any]]:
     train_file = Path(args.input_file).parent / "train.json"
     rule_path = _expel_rule_path(args)
+    reuse_source = getattr(args, "reuse_train_benchmark", "")
     if rule_path.exists():
         memory = read_json(rule_path)
         if int(memory.get("version", 0)) == EXPEL_RULE_MEMORY_VERSION:
+            if reuse_source:
+                print(f"[ExpeL] Reusing rules from {reuse_source}: {rule_path}")
             return list(memory.get("rules", []))
+    if reuse_source:
+        raise FileNotFoundError(
+            f"Missing reusable ExpeL rule memory for {args.benchmark}: {rule_path}. "
+            f"Run {reuse_source} before {args.benchmark}."
+        )
 
     train_data = json.loads(train_file.read_text(encoding="utf-8"))[: int(args.expel_train_samples)]
 

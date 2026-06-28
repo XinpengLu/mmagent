@@ -48,6 +48,7 @@ BASELINE_CONFIG_ONLY_FIELDS = {
     "code_tools",
     "general_tools",
     "search_tools",
+    "reuse_train_benchmark_for_test_only",
 }
 
 
@@ -159,6 +160,22 @@ def _baseline_prompt_and_tools(benchmark: str, settings: dict[str, Any]) -> tupl
     return str(baseline["code_prompt"]), str(baseline["code_tools"])
 
 
+def _reuse_train_map(settings: dict[str, Any]) -> dict[str, str]:
+    mapping = settings.get("baseline", {}).get("reuse_train_benchmark_for_test_only", {}) or {}
+    if not isinstance(mapping, dict):
+        raise ValueError("baseline.reuse_train_benchmark_for_test_only must be a mapping.")
+    return {str(target): str(source) for target, source in mapping.items() if source}
+
+
+def _validate_reuse_train_order(runtime: RuntimeConfig) -> None:
+    benchmark_order = {benchmark: idx for idx, benchmark in enumerate(runtime.benchmarks)}
+    for target, source in _reuse_train_map(runtime.settings).items():
+        if target in benchmark_order and source in benchmark_order and benchmark_order[source] > benchmark_order[target]:
+            raise ValueError(
+                f"{target} reuses {source} train artifacts, so {source} must appear before {target} in benchmarks."
+            )
+
+
 def _sample_count(data_path: Path, max_samples: int | None) -> int:
     if max_samples is not None:
         return max_samples
@@ -173,8 +190,11 @@ def _build_args(runtime: RuntimeConfig, benchmark: str, max_samples: int | None)
     data_path = paths.split_root / benchmark / "test.json"
     output_dir = paths.output_root / benchmark / "test"
     baseline_name = str(settings["baseline"]["name"])
+    reuse_source = _reuse_train_map(settings).get(benchmark, "")
+    train_source_benchmark = reuse_source or benchmark
     args = SimpleNamespace(
         phase="test",
+        benchmark=benchmark,
         input_file=str(data_path),
         image_folder=str(paths.bench_root),
         output_dir=str(output_dir),
@@ -189,9 +209,11 @@ def _build_args(runtime: RuntimeConfig, benchmark: str, max_samples: int | None)
         **DISABLED_MEMORY_SETTINGS,
         experience_library="",
         skill_library="",
+        reuse_train_benchmark=reuse_source,
+        train_source_benchmark=train_source_benchmark,
     )
     if baseline_name in {"expel", "trace2skill"}:
-        args.train_output_dir = str(paths.output_root / benchmark / "train")
+        args.train_output_dir = str(paths.output_root / train_source_benchmark / "train")
     for key, value in settings.get("baseline", {}).items():
         if key not in BASELINE_CONFIG_ONLY_FIELDS:
             setattr(args, key, value)
@@ -238,6 +260,7 @@ def _run_benchmark(runtime: RuntimeConfig, benchmark: str, max_samples: int | No
 
 def run(config_path: Path, max_samples: int | None) -> None:
     runtime = _runtime_from_yaml(config_path)
+    _validate_reuse_train_order(runtime)
     _apply_baseline_env(runtime)
     for benchmark in runtime.benchmarks:
         print(f"\n[Baseline] {runtime.settings['baseline']['name']} / {benchmark}")
