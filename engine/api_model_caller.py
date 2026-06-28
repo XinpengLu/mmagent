@@ -15,6 +15,8 @@ from utils.artifacts import save_trajectory
 from engine.api_caller import call_vision_api
 from engine.api_tool_handler import APIToolHandler
 
+CALLABLE_TOOL_NAMES = ("code_interpreter", "web_search", "visit", "image_search", "zoom")
+
 
 @dataclass
 class AgentState:
@@ -67,6 +69,31 @@ def _build_openai_tools_schema(tool_names: Optional[List[str]] = None) -> List[D
     return tools
 
 
+def _parse_inline_tool_arguments(raw_name: str) -> dict[str, Any]:
+    params = {}
+    inline_text = raw_name
+    match = re.search(r"\((.*?)\)", raw_name, flags=re.S)
+    if match:
+        inline_text = match.group(1)
+    for key, quote, value in re.findall(r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(['\"])(.*?)\2", inline_text, flags=re.S):
+        params[key] = value
+    for key, quote, value in re.findall(r'["\']([A-Za-z_][A-Za-z0-9_]*)["\']\s*:\s*(["\'])(.*?)\2', inline_text, flags=re.S):
+        params[key] = value
+    return params
+
+
+def _normalize_tool_call(tool_name: str, parameters: Any) -> tuple[str, Any]:
+    raw_name = str(tool_name or "").strip()
+    if raw_name in CALLABLE_TOOL_NAMES:
+        return raw_name, parameters
+    for name in CALLABLE_TOOL_NAMES:
+        if re.match(rf'^{re.escape(name)}\s*(?:\(|<|,|"|\'|$)', raw_name):
+            fixed_parameters = parameters or _parse_inline_tool_arguments(raw_name)
+            print(f"[Function Call Parser] Normalized malformed tool name '{raw_name}' -> '{name}'")
+            return name, fixed_parameters
+    return raw_name, parameters
+
+
 def parse_function_call_response(response: Union[str, Dict], text_content: str = None) -> Tuple[str, Any]:
     if isinstance(response, dict):
         tool_calls = response.get("tool_calls") or []
@@ -86,6 +113,7 @@ def parse_function_call_response(response: Union[str, Dict], text_content: str =
                 parameters = arguments
             if not tool_name:
                 return "error", "Tool call missing 'name' field"
+            tool_name, parameters = _normalize_tool_call(tool_name, parameters)
             return "function_call", {
                 "tool_name": tool_name,
                 "parameters": parameters,
