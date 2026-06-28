@@ -1,10 +1,11 @@
 mode: train_test
 
 benchmarks:
+  - TIR-Bench
   - VisualToolBench
-  - BrowseComp-V3
-  - VisBrowse-Bench
-  - Agentic-MME
+  - MMSearch-Plus
+  - MMBrowseComp
+  - AgentVista
 
 paths:
   benchmark_processed: benchmark/processed

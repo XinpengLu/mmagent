@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-import math
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -41,7 +41,7 @@ ADD <NEW RULE NUMBER>: <NEW RULE>
 Use at most 4 operations. Do not mention sample-specific facts, names, IDs, or answers.
 Each rule must be a general strategy for future visual/tool-using reasoning tasks."""
 
-EXPEL_RULE_MEMORY_VERSION = 2
+EXPEL_RULE_MEMORY_VERSION = 3
 
 
 def _empty_rule_memory() -> dict[str, Any]:
@@ -61,18 +61,6 @@ def _chat_text(model_name: str, system_prompt: str, user_prompt: str, max_tokens
     if isinstance(response, dict):
         return str(response.get("content") or "").strip()
     return str(response or "").strip()
-
-
-def _tokenize(text: str) -> set[str]:
-    return {token for token in re.findall(r"[A-Za-z0-9_]+", text.lower()) if len(token) > 2}
-
-
-def _rule_similarity(question: str, rule: dict[str, Any]) -> float:
-    query_tokens = _tokenize(question)
-    rule_tokens = _tokenize(" ".join([str(rule.get("source_question", "")), str(rule.get("rule", ""))]))
-    if not query_tokens or not rule_tokens:
-        return 0.0
-    return len(query_tokens & rule_tokens) / math.sqrt(len(query_tokens) * len(rule_tokens))
 
 
 def _format_existing_rules(rules: list[dict[str, Any]]) -> str:
@@ -129,6 +117,13 @@ def _renumber_rules(rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rules
 
 
+def _limit_rules(rules: list[dict[str, Any]], max_rules: int) -> list[dict[str, Any]]:
+    ordered = sorted(rules, key=lambda rule: int(rule.get("count", 1)), reverse=True)[:max_rules]
+    for idx, rule in enumerate(ordered):
+        rule["id"] = f"rule_{idx:04d}"
+    return ordered
+
+
 def _apply_rule_operations(
     rules: list[dict[str, Any]],
     operations: list[tuple[str, int | None, str]],
@@ -183,12 +178,15 @@ def _update_rules_from_result(
         max_tokens=int(args.expel_rule_max_tokens),
     )
     operations = _parse_rule_operations(text)
-    memory["rules"] = _apply_rule_operations(
-        memory["rules"],
-        operations,
-        sample,
-        question_id,
-        float(result.get("accuracy_score", 0.0) or 0.0),
+    memory["rules"] = _limit_rules(
+        _apply_rule_operations(
+            memory["rules"],
+            operations,
+            sample,
+            question_id,
+            float(result.get("accuracy_score", 0.0) or 0.0),
+        ),
+        int(args.expel_max_rules),
     )
     memory["logs"].append({"source_question_id": question_id, "operations": text, "parsed_operations": operations})
 
@@ -197,11 +195,42 @@ def _expel_rule_path(args) -> Path:
     return Path(args.train_output_dir) / "expel_rule_memory.json"
 
 
+def _run_expel_training_sample(
+    sample_idx: int,
+    sample: dict[str, Any],
+    total_samples: int,
+    train_args,
+    config,
+    memory: dict[str, Any],
+    rule_path: Path,
+    update_args,
+) -> None:
+    question_id = _question_id(sample, sample_idx)
+    for rollout_idx in range(train_args.rollouts_per_sample):
+        print(
+            f"[ExpeL] Training sample {sample_idx + 1}/{total_samples} {question_id}: "
+            f"trial {rollout_idx + 1}/{train_args.rollouts_per_sample}"
+        )
+        train_args._sample_system_prompt = _format_expel_rules(memory["rules"]) + config.base_system_prompt
+        result = _run_rollout(sample, train_args, config.sampling_params, rollout_idx=rollout_idx)
+        if not result or result_has_transient_failure(result):
+            continue
+
+        rollout_dir = _rollout_dir(train_args.output_dir, question_id, rollout_idx, train_args.rollouts_per_sample)
+        _update_rules_from_result(sample, result, update_args, rollout_dir, memory, question_id)
+        write_json(rule_path, memory, indent=2)
+
+        if float(result.get("accuracy_score", 0.0) or 0.0) >= 1.0:
+            break
+
+
 def _build_expel_rules(config, args) -> list[dict[str, Any]]:
     train_file = Path(args.input_file).parent / "train.json"
     rule_path = _expel_rule_path(args)
     if rule_path.exists():
-        return list(read_json(rule_path).get("rules", []))
+        memory = read_json(rule_path)
+        if int(memory.get("version", 0)) == EXPEL_RULE_MEMORY_VERSION:
+            return list(memory.get("rules", []))
 
     train_data = json.loads(train_file.read_text(encoding="utf-8"))[: int(args.expel_train_samples)]
 
@@ -209,27 +238,23 @@ def _build_expel_rules(config, args) -> list[dict[str, Any]]:
     train_args.phase = "train"
     train_args.input_file = str(train_file)
     train_args.output_dir = str(Path(args.train_output_dir))
-    train_args.rollouts_per_sample = 1
+    train_args.rollouts_per_sample = int(args.rollouts_per_sample)
     train_args.num_workers = 1
     train_args._sample_system_prompt = config.base_system_prompt
 
     memory = _empty_rule_memory()
     for sample_idx, sample in enumerate(train_data):
-        question_id = _question_id(sample, sample_idx)
-        print(f"[ExpeL] Training sample {sample_idx + 1}/{len(train_data)} {question_id}: updating rules")
-        result = _run_rollout(sample, train_args, config.sampling_params, rollout_idx=0)
-        if not result:
-            continue
-        rollout_dir = _rollout_dir(train_args.output_dir, question_id, 0, train_args.rollouts_per_sample)
-        _update_rules_from_result(sample, result, args, rollout_dir, memory, question_id)
-        write_json(rule_path, memory, indent=2)
+        _run_expel_training_sample(
+            sample_idx,
+            sample,
+            len(train_data),
+            train_args,
+            config,
+            memory,
+            rule_path,
+            args,
+        )
     return memory["rules"]
-
-
-def _selected_expel_rules(sample: dict[str, Any], rules: list[dict[str, Any]], top_k: int) -> list[dict[str, Any]]:
-    scored = [(_rule_similarity(_sample_question(sample), rule), rule) for rule in rules]
-    scored.sort(key=lambda item: item[0], reverse=True)
-    return [rule for score, rule in scored[:top_k] if score > 0.0]
 
 
 def _format_expel_rules(rules: list[dict[str, Any]]) -> str:
@@ -239,36 +264,67 @@ def _format_expel_rules(rules: list[dict[str, Any]]) -> str:
     return f"## Retrieved ExpeL Rules\n{text}\n\nUse these reusable rules as guidance, but rely on the current image and question.\n"
 
 
+def _run_expel_test_sample(
+    sample_idx: int,
+    sample: dict[str, Any],
+    total_samples: int,
+    args,
+    sampling_params: dict[str, Any],
+    base_prompt: str,
+    rules: list[dict[str, Any]],
+) -> tuple[int, list[dict[str, Any]]]:
+    question_id = _question_id(sample, sample_idx)
+    sample_dir = Path(args.output_dir) / question_id
+    sample_dir.mkdir(parents=True, exist_ok=True)
+    sample_results, pending = _load_completed_rollouts(sample_dir, args.rollouts_per_sample)
+    if not pending:
+        print(f"[ExpeL] Sample {sample_idx + 1}/{total_samples} {question_id}: already completed.")
+        compute_and_save_sample_summary(question_id, sample_results, args.rollouts_per_sample, sample_dir)
+        return sample_idx, sample_results
+
+    args._sample_system_prompt = _format_expel_rules(rules) + base_prompt
+    write_json(sample_dir / "expel_injected_rules.json", {"rules": rules}, indent=2)
+
+    sample_results_by_idx = {int(r["_rollout_idx"]): r for r in sample_results}
+    for rollout_idx in pending:
+        print(f"[ExpeL] Sample {sample_idx + 1}/{total_samples} {question_id}: rollout {rollout_idx}")
+        result = _run_rollout(sample, args, sampling_params, rollout_idx)
+        if result and not result_has_transient_failure(result):
+            sample_results_by_idx[rollout_idx] = result
+
+    ordered_results = [sample_results_by_idx[idx] for idx in sorted(sample_results_by_idx)]
+    compute_and_save_sample_summary(question_id, ordered_results, args.rollouts_per_sample, sample_dir)
+    return sample_idx, ordered_results
+
+
 def run_expel_benchmark(config, args) -> list[dict[str, Any]]:
-    """Train a lightweight rule memory, then retrieve rules for test rollouts."""
+    """Train an ExpeL-style rule memory, then inject the highest-count rules for test."""
     base_prompt = config.base_system_prompt
     rules = _build_expel_rules(config, args)
+    total_samples = len(config.data)
+    max_workers = max(1, min(int(args.num_workers), total_samples))
+    print(f"[ExpeL] Testing {total_samples} samples with {max_workers} worker(s).")
+
+    sample_outputs: dict[int, list[dict[str, Any]]] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(
+                _run_expel_test_sample,
+                sample_idx,
+                sample,
+                total_samples,
+                SimpleNamespace(**vars(args)),
+                config.sampling_params,
+                base_prompt,
+                rules,
+            )
+            for sample_idx, sample in enumerate(config.data)
+        ]
+        for future in as_completed(futures):
+            sample_idx, sample_results = future.result()
+            sample_outputs[sample_idx] = sample_results
+
     all_results: list[dict[str, Any]] = []
-
-    for sample_idx, sample in enumerate(config.data):
-        question_id = _question_id(sample, sample_idx)
-        sample_dir = Path(args.output_dir) / question_id
-        sample_dir.mkdir(parents=True, exist_ok=True)
-        sample_results, pending = _load_completed_rollouts(sample_dir, args.rollouts_per_sample)
-        if not pending:
-            print(f"[ExpeL] Sample {sample_idx + 1}/{len(config.data)} {question_id}: already completed.")
-            compute_and_save_sample_summary(question_id, sample_results, args.rollouts_per_sample, sample_dir)
-            all_results.extend(sample_results)
-            continue
-
-        selected_rules = _selected_expel_rules(sample, rules, int(args.expel_top_k))
-        args._sample_system_prompt = _format_expel_rules(selected_rules) + base_prompt
-        write_json(sample_dir / "expel_selected_rules.json", {"rules": selected_rules}, indent=2)
-
-        sample_results_by_idx = {int(r["_rollout_idx"]): r for r in sample_results}
-        for rollout_idx in pending:
-            print(f"[ExpeL] Sample {sample_idx + 1}/{len(config.data)} {question_id}: rollout {rollout_idx}")
-            result = _run_rollout(sample, args, config.sampling_params, rollout_idx)
-            if result and not result_has_transient_failure(result):
-                sample_results_by_idx[rollout_idx] = result
-
-        ordered_results = [sample_results_by_idx[idx] for idx in sorted(sample_results_by_idx)]
-        compute_and_save_sample_summary(question_id, ordered_results, args.rollouts_per_sample, sample_dir)
-        all_results.extend(ordered_results)
-
+    for sample_idx in sorted(sample_outputs):
+        all_results.extend(sample_outputs[sample_idx])
     return all_results

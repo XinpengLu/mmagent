@@ -1,10 +1,11 @@
 mode: train_test
 
 benchmarks:
+  - TIR-Bench
   - VisualToolBench
-  - BrowseComp-V3
-  - VisBrowse-Bench
-  - Agentic-MME
+  - MMSearch-Plus
+  - MMBrowseComp
+  - AgentVista
 
 paths:
   benchmark_processed: benchmark/processed
@@ -30,7 +31,7 @@ baseline:
   trace2skill_guide_max_tokens: 2048
 
 runtime:
-  num_workers: 1
+  num_workers: 8
 
 rollout:
   per_sample: 4
