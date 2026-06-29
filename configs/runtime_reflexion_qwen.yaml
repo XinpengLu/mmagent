@@ -29,7 +29,7 @@ baseline:
   reflection_max_tokens: 512
 
 runtime:
-  num_workers: 12
+  num_workers: 8
 
 rollout:
   per_sample: 4

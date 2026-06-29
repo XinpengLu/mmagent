@@ -62,6 +62,14 @@ def _local_lessons_path(args) -> Path:
     return _trace2skill_root(args) / "trace2skill_memory_items.json"
 
 
+def _sample_lesson_dir(args) -> Path:
+    return _trace2skill_root(args) / "trace2skill_items"
+
+
+def _sample_lesson_path(args, question_id: str) -> Path:
+    return _sample_lesson_dir(args) / f"{question_id}.json"
+
+
 def _guide_path(args) -> Path:
     return _trace2skill_root(args) / "SKILL.md"
 
@@ -123,6 +131,11 @@ def _run_trace2skill_training_sample(
     sampling_params: dict[str, Any],
 ) -> tuple[int, dict[str, Any] | None]:
     question_id = _question_id(sample, sample_idx)
+    sample_lesson_path = _sample_lesson_path(args, question_id)
+    if sample_lesson_path.exists():
+        print(f"[Trace2Skill] Training sample {sample_idx + 1}/{total_samples} {question_id}: reusing cached memory items")
+        return sample_idx, read_json(sample_lesson_path)
+
     print(f"[Trace2Skill] Training sample {sample_idx + 1}/{total_samples} {question_id}: extracting memory items")
     result = _run_rollout(sample, args, sampling_params, rollout_idx=0)
     if not result or result_has_transient_failure(result):
@@ -133,12 +146,27 @@ def _run_trace2skill_training_sample(
     if not memory_items:
         return sample_idx, None
 
-    return sample_idx, {
+    record = {
         "source_question_id": question_id,
         "source_score": result.get("accuracy_score", 0.0),
         "outcome": "success" if float(result.get("accuracy_score", 0.0) or 0.0) >= 1.0 else "failure",
         "memory_items": memory_items,
     }
+    write_json(sample_lesson_path, record, indent=2)
+    return sample_idx, record
+
+
+def _cached_lesson_records(args, train_data: list[dict[str, Any]]) -> tuple[dict[int, dict[str, Any]], list[tuple[int, dict[str, Any]]]]:
+    cached = {}
+    pending = []
+    for sample_idx, sample in enumerate(train_data):
+        question_id = _question_id(sample, sample_idx)
+        sample_lesson_path = _sample_lesson_path(args, question_id)
+        if sample_lesson_path.exists():
+            cached[sample_idx] = read_json(sample_lesson_path)
+        else:
+            pending.append((sample_idx, sample))
+    return cached, pending
 
 
 def _collect_local_lessons(config, args) -> list[dict[str, Any]]:
@@ -161,25 +189,29 @@ def _collect_local_lessons(config, args) -> list[dict[str, Any]]:
     train_args.num_workers = int(args.num_workers)
     train_args._sample_system_prompt = config.base_system_prompt
 
-    max_workers = max(1, min(int(args.num_workers), len(train_data)))
-    print(f"[Trace2Skill] Training {len(train_data)} samples with {max_workers} worker(s).")
-    memory_outputs: dict[int, dict[str, Any]] = {}
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [
-            executor.submit(
-                _run_trace2skill_training_sample,
-                sample_idx,
-                sample,
-                len(train_data),
-                SimpleNamespace(**vars(train_args)),
-                config.sampling_params,
-            )
-            for sample_idx, sample in enumerate(train_data)
-        ]
-        for future in as_completed(futures):
-            sample_idx, record = future.result()
-            if record is not None:
-                memory_outputs[sample_idx] = record
+    memory_outputs, pending_samples = _cached_lesson_records(train_args, train_data)
+    if memory_outputs:
+        print(f"[Trace2Skill] Reusing {len(memory_outputs)} cached training memory item file(s).")
+
+    if pending_samples:
+        max_workers = max(1, min(int(args.num_workers), len(pending_samples)))
+        print(f"[Trace2Skill] Training {len(pending_samples)}/{len(train_data)} uncached samples with {max_workers} worker(s).")
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [
+                executor.submit(
+                    _run_trace2skill_training_sample,
+                    sample_idx,
+                    sample,
+                    len(train_data),
+                    SimpleNamespace(**vars(train_args)),
+                    config.sampling_params,
+                )
+                for sample_idx, sample in pending_samples
+            ]
+            for future in as_completed(futures):
+                sample_idx, record = future.result()
+                if record is not None:
+                    memory_outputs[sample_idx] = record
 
     memory_records = [memory_outputs[idx] for idx in sorted(memory_outputs)]
     write_json(lesson_path, {"memory_items": memory_records}, indent=2)

@@ -1,7 +1,6 @@
 mode: test
 
 benchmarks:
-  - BrowseComp-V3
   - VisBrowse-Bench
   - Agentic-MME
 
@@ -26,7 +25,7 @@ baseline:
   enable_function_calling: true
 
 runtime:
-  num_workers: 12
+  num_workers: 8
 
 rollout:
   per_sample: 4
