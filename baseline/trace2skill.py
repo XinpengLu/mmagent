@@ -136,8 +136,14 @@ def _run_trace2skill_training_sample(
         print(f"[Trace2Skill] Training sample {sample_idx + 1}/{total_samples} {question_id}: reusing cached memory items")
         return sample_idx, read_json(sample_lesson_path)
 
-    print(f"[Trace2Skill] Training sample {sample_idx + 1}/{total_samples} {question_id}: extracting memory items")
-    result = _run_rollout(sample, args, sampling_params, rollout_idx=0)
+    sample_dir = Path(args.output_dir) / question_id
+    completed_rollouts, pending = _load_completed_rollouts(sample_dir, args.rollouts_per_sample)
+    if completed_rollouts:
+        print(f"[Trace2Skill] Training sample {sample_idx + 1}/{total_samples} {question_id}: extracting memory items from cached rollout")
+        result = completed_rollouts[0]
+    else:
+        print(f"[Trace2Skill] Training sample {sample_idx + 1}/{total_samples} {question_id}: running rollout and extracting memory items")
+        result = _run_rollout(sample, args, sampling_params, rollout_idx=0)
     if not result or result_has_transient_failure(result):
         return sample_idx, None
 

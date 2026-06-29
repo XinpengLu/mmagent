@@ -37,8 +37,8 @@ def _rollout_dir(output_dir: str | Path, question_id: str, rollout_idx: int, rol
     return sample_dir / f"rollout_{rollout_idx}" if rollouts_per_sample > 1 else sample_dir
 
 
-def _completed_rollout_result(sample_dir: Path, rollout_idx: int) -> dict[str, Any] | None:
-    rollout_dir = sample_dir / f"rollout_{rollout_idx}"
+def _completed_rollout_result(sample_dir: Path, rollout_idx: int, rollouts_per_sample: int) -> dict[str, Any] | None:
+    rollout_dir = sample_dir / f"rollout_{rollout_idx}" if rollouts_per_sample > 1 else sample_dir
     traj_path = rollout_dir / TRAJECTORY_FILENAME
     metrics_path = rollout_dir / ROLLOUT_METRICS_FILENAME
     if not (traj_path.exists() and metrics_path.exists()):
@@ -58,7 +58,7 @@ def _load_completed_rollouts(sample_dir: Path, rollouts_per_sample: int) -> tupl
     results = []
     missing = []
     for rollout_idx in range(rollouts_per_sample):
-        result = _completed_rollout_result(sample_dir, rollout_idx)
+        result = _completed_rollout_result(sample_dir, rollout_idx, rollouts_per_sample)
         if result is None:
             missing.append(rollout_idx)
         else:
