@@ -13,7 +13,7 @@ from PIL import Image
 
 from utils.artifacts import save_trajectory
 from engine.api_caller import call_vision_api
-from engine.api_tool_handler import APIToolHandler
+from engine.api_tool_handler import APIToolHandler, InvalidToolCallError
 
 CALLABLE_TOOL_NAMES = ("code_interpreter", "web_search", "visit", "image_search", "zoom")
 
@@ -332,9 +332,14 @@ def _handle_model_action(action, data, node, tool_handler, global_turn_idx):
         parameters = data.get("parameters", {})
         tool_call_id = data.get("tool_call_id") or _tool_call_id_from_history(node)
 
-        result = tool_handler.execute_tool_call(
-            tool_name, parameters, node, global_turn_idx, tool_call_id
-        )
+        try:
+            result = tool_handler.execute_tool_call(
+                tool_name, parameters, node, global_turn_idx, tool_call_id
+            )
+        except InvalidToolCallError as exc:
+            node.tool_transient_failure = True
+            node.mark_final(f"Error: tool_transient_failure: {exc}")
+            return "invalid_tool_call"
         if result.get('feedback_messages'):
             node.api_conversation_history.extend(result['feedback_messages'])
         return bool(result.get('skip_processing'))
@@ -370,7 +375,10 @@ def create_model_caller(args, sampling_params, save_dir=None):
             _save_model_turn(save_dir, node, global_turn_idx, response, response_text, reasoning_text)
 
             action, data = parse_function_call_response(response, text_content=response_text)
-            if _handle_model_action(action, data, node, tool_handler, global_turn_idx):
+            action_result = _handle_model_action(action, data, node, tool_handler, global_turn_idx)
+            if action_result == "invalid_tool_call":
+                return None
+            if action_result:
                 node.current_turn += 1
                 return response_text
 

@@ -17,6 +17,10 @@ WEB_SEARCH_MAX_CALLS = 7
 CODE_INTERPRETER_MAX_CALLS = 10
 
 
+class InvalidToolCallError(Exception):
+    """Raised when the model emits a tool call that cannot be executed."""
+
+
 class APIToolHandler:
     """Execute tools and append their observations to the active trajectory."""
 
@@ -259,10 +263,6 @@ class APIToolHandler:
         if not reason:
             return None
 
-        feedback_msg = (
-            f"Invalid tool call: {reason}\n"
-            "Call the same tool again with valid arguments. Do not answer until the corrected tool call has been executed."
-        )
         print(f"[Tool Call Rejected] {tool_name} with params: {parameters}. {reason}")
         self._save_event(node, {
             "turn_idx": turn_idx,
@@ -270,10 +270,10 @@ class APIToolHandler:
                 "tool_name": tool_name,
                 "parameters": parameters,
                 "error": reason,
+                "failure_type": "tool_transient_failure",
             },
         })
-        self._record_tool_feedback(node, feedback_msg)
-        return self._error_result(feedback_msg, tool_call_id)
+        raise InvalidToolCallError(reason)
 
     def _limit_exceeded_result(self, tool_name, node, tool_call_id):
         tool_limit = self.tool_call_limits.get(tool_name, None)
