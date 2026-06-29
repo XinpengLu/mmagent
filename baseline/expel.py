@@ -41,11 +41,11 @@ ADD <NEW RULE NUMBER>: <NEW RULE>
 Use at most 4 operations. Do not mention sample-specific facts, names, IDs, or answers.
 Each rule must be a general strategy for future visual/tool-using reasoning tasks."""
 
-EXPEL_RULE_MEMORY_VERSION = 3
+EXPEL_RULE_MEMORY_VERSION = 4
 
 
 def _empty_rule_memory() -> dict[str, Any]:
-    return {"version": EXPEL_RULE_MEMORY_VERSION, "rules": [], "logs": []}
+    return {"version": EXPEL_RULE_MEMORY_VERSION, "rules": [], "logs": [], "completed_question_ids": []}
 
 
 def _chat_text(model_name: str, system_prompt: str, user_prompt: str, max_tokens: int = 512) -> str:
@@ -195,6 +195,24 @@ def _expel_rule_path(args) -> Path:
     return Path(args.train_output_dir) / "expel_rule_memory.json"
 
 
+def _load_rule_memory(rule_path: Path) -> dict[str, Any]:
+    if not rule_path.exists():
+        return _empty_rule_memory()
+    memory = read_json(rule_path)
+    if int(memory.get("version", 0)) != EXPEL_RULE_MEMORY_VERSION:
+        return _empty_rule_memory()
+    return memory
+
+
+def _completed_question_ids(memory: dict[str, Any]) -> set[str]:
+    return set(memory["completed_question_ids"])
+
+
+def _mark_training_sample_complete(memory: dict[str, Any], question_id: str) -> None:
+    if question_id not in memory["completed_question_ids"]:
+        memory["completed_question_ids"].append(question_id)
+
+
 def _run_expel_training_sample(
     sample_idx: int,
     sample: dict[str, Any],
@@ -204,8 +222,9 @@ def _run_expel_training_sample(
     memory: dict[str, Any],
     rule_path: Path,
     update_args,
-) -> None:
+) -> bool:
     question_id = _question_id(sample, sample_idx)
+    sample_completed = False
     for rollout_idx in range(train_args.rollouts_per_sample):
         print(
             f"[ExpeL] Training sample {sample_idx + 1}/{total_samples} {question_id}: "
@@ -218,22 +237,26 @@ def _run_expel_training_sample(
 
         rollout_dir = _rollout_dir(train_args.output_dir, question_id, rollout_idx, train_args.rollouts_per_sample)
         _update_rules_from_result(sample, result, update_args, rollout_dir, memory, question_id)
-        write_json(rule_path, memory, indent=2)
+        sample_completed = True
 
         if float(result.get("accuracy_score", 0.0) or 0.0) >= 1.0:
             break
+    if sample_completed:
+        _mark_training_sample_complete(memory, question_id)
+        write_json(rule_path, memory, indent=2)
+    else:
+        print(f"[ExpeL] Training sample {sample_idx + 1}/{total_samples} {question_id}: no valid rollout; will retry on resume.")
+    return sample_completed
 
 
 def _build_expel_rules(config, args) -> list[dict[str, Any]]:
     train_file = Path(args.input_file).parent / "train.json"
     rule_path = _expel_rule_path(args)
     reuse_source = getattr(args, "reuse_train_benchmark", "")
-    if rule_path.exists():
-        memory = read_json(rule_path)
-        if int(memory.get("version", 0)) == EXPEL_RULE_MEMORY_VERSION:
-            if reuse_source:
-                print(f"[ExpeL] Reusing rules from {reuse_source}: {rule_path}")
-            return list(memory.get("rules", []))
+    memory = _load_rule_memory(rule_path)
+    if reuse_source and rule_path.exists() and memory["rules"]:
+        print(f"[ExpeL] Reusing rules from {reuse_source}: {rule_path}")
+        return list(memory["rules"])
     if reuse_source:
         raise FileNotFoundError(
             f"Missing reusable ExpeL rule memory for {args.benchmark}: {rule_path}. "
@@ -250,8 +273,20 @@ def _build_expel_rules(config, args) -> list[dict[str, Any]]:
     train_args.num_workers = 1
     train_args._sample_system_prompt = config.base_system_prompt
 
-    memory = _empty_rule_memory()
-    for sample_idx, sample in enumerate(train_data):
+    train_question_ids = {_question_id(sample, sample_idx) for sample_idx, sample in enumerate(train_data)}
+    completed_ids = _completed_question_ids(memory) & train_question_ids
+    pending_samples = [
+        (sample_idx, sample)
+        for sample_idx, sample in enumerate(train_data)
+        if _question_id(sample, sample_idx) not in completed_ids
+    ]
+    if not pending_samples:
+        print(f"[ExpeL] Training already complete: {len(train_data)}/{len(train_data)} samples.")
+        return list(memory["rules"])
+    if completed_ids:
+        print(f"[ExpeL] Resuming training: {len(completed_ids)}/{len(train_data)} samples already complete.")
+
+    for sample_idx, sample in pending_samples:
         _run_expel_training_sample(
             sample_idx,
             sample,
