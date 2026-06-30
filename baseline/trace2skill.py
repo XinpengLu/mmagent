@@ -12,6 +12,7 @@ from typing import Any
 from engine.api_caller import call_vision_api
 from main_flow.metrics import compute_and_save_sample_summary
 from utils.artifacts import read_json, write_json
+from utils.json_utils import parse_llm_json_object
 from utils.transient import result_has_transient_failure
 
 from baseline.reflexion import (
@@ -33,10 +34,18 @@ TRACE2SKILL_MEMORY_SYSTEM_PROMPT = (
 )
 
 TRACE2SKILL_CONSOLIDATION_SYSTEM_PROMPT = (
-    "You are consolidating Trace2Skill memory items into a compact SKILL.md document for "
-    "a multimodal tool-using agent. Merge duplicates, resolve conflicts, and keep only "
-    "actionable guidance that transfers across tasks."
+    "You are a Trace2Skill skill-evolution agent. Merge local skill patches into one "
+    "compact, conflict-free SKILL.md for a multimodal tool-using agent. Preserve only "
+    "general rules that transfer across tasks."
 )
+
+TRACE2SKILL_PATCH_SYSTEM_PROMPT = (
+    "You are a Trace2Skill MAP analyst. Given a frozen initial skill and a small batch "
+    "of trajectory-local lessons, propose a concise local patch. The patch must be "
+    "general, evidence-driven, and free of sample-specific answers."
+)
+
+SKILL_SECTIONS = ("Visual Grounding", "Tool Use", "Verification", "Failure Avoidance")
 
 
 def _chat_text(model_name: str, system_prompt: str, user_prompt: str, max_tokens: int) -> str:
@@ -68,6 +77,18 @@ def _sample_lesson_dir(args) -> Path:
 
 def _sample_lesson_path(args, question_id: str) -> Path:
     return _sample_lesson_dir(args) / f"{question_id}.json"
+
+
+def _patch_dir(args) -> Path:
+    return _trace2skill_root(args) / "trace2skill_patches"
+
+
+def _patch_path(args, batch_idx: int) -> Path:
+    return _patch_dir(args) / f"patch_batch_{batch_idx:03d}.json"
+
+
+def _merged_patch_path(args) -> Path:
+    return _trace2skill_root(args) / "trace2skill_merged_patch.json"
 
 
 def _guide_path(args) -> Path:
@@ -224,7 +245,29 @@ def _collect_local_lessons(config, args) -> list[dict[str, Any]]:
     return memory_records
 
 
-def _consolidation_prompt(lesson_records: list[dict[str, Any]]) -> str:
+def _initial_skill_text() -> str:
+    return (
+        "---\n"
+        "name: trace2skill-adapted\n"
+        "description: Use when solving multimodal benchmark tasks with web, image, visit, and code tools\n"
+        "---\n\n"
+        "# Trace2Skill Adapted Skill\n\n"
+        "## Visual Grounding\n"
+        "- Inspect the current image before relying on memory or search results.\n"
+        "- Tie every visual claim to visible evidence or a tool observation.\n\n"
+        "## Tool Use\n"
+        "- Use search, visit, image search, or code only when they can answer a concrete subquestion.\n"
+        "- Provide complete tool arguments; never issue empty search or visit calls.\n\n"
+        "## Verification\n"
+        "- Cross-check the final answer against the question, image evidence, and retrieved evidence.\n"
+        "- Prefer a short verified answer over unsupported speculation.\n\n"
+        "## Failure Avoidance\n"
+        "- Do not copy source-specific answers from prior tasks.\n"
+        "- If evidence conflicts, resolve the conflict before giving the final answer.\n"
+    )
+
+
+def _lesson_blocks(lesson_records: list[dict[str, Any]]) -> str:
     blocks = []
     for record in lesson_records:
         items = "\n".join(
@@ -234,58 +277,169 @@ def _consolidation_prompt(lesson_records: list[dict[str, Any]]) -> str:
         blocks.append(
             f"Source: {record['source_question_id']} | score={record['source_score']} | outcome={record['outcome']}\n{items}"
         )
+    return "\n\n".join(blocks)
+
+
+def _patch_prompt(initial_skill: str, batch_idx: int, lesson_records: list[dict[str, Any]]) -> str:
     return (
-        "Consolidate the following Trace2Skill memory items into a compact SKILL.md for a "
-        "multimodal visual/tool-using agent.\n\n"
-        "Use this structure:\n"
-        "---\n"
-        "name: trace2skill-adapted\n"
-        "description: Use when solving multimodal benchmark tasks with web, image, visit, and code tools\n"
-        "---\n\n"
-        "# Trace2Skill Adapted Skill\n"
-        "## Visual Grounding\n"
-        "## Tool Use\n"
-        "## Verification\n"
-        "## Failure Avoidance\n\n"
-        "Keep it compact and actionable. Do not mention source ids, ground-truth labels, or sample-specific facts.\n\n"
-        + "\n\n".join(blocks)
+        "Frozen initial skill:\n"
+        f"{initial_skill}\n\n"
+        f"Patch batch id: {batch_idx}\n\n"
+        "Trajectory-local lessons:\n"
+        f"{_lesson_blocks(lesson_records)}\n\n"
+        "Return strict JSON only, with this schema:\n"
+        "{\n"
+        '  "batch_id": <integer>,\n'
+        '  "evidence_summary": "<one short paragraph>",\n'
+        '  "sections": {\n'
+        '    "Visual Grounding": ["<general rule>", "..."],\n'
+        '    "Tool Use": ["<general rule>", "..."],\n'
+        '    "Verification": ["<general rule>", "..."],\n'
+        '    "Failure Avoidance": ["<general rule>", "..."]\n'
+        "  }\n"
+        "}\n"
+        "Rules must be transferable, compact, and free of sample ids or ground-truth answers."
     )
+
+
+def _merge_prompt(initial_skill: str, patches: list[dict[str, Any]]) -> str:
+    return (
+        "Frozen initial skill:\n"
+        f"{initial_skill}\n\n"
+        "Local Trace2Skill patches:\n"
+        f"{json.dumps(patches, ensure_ascii=False, indent=2)}\n\n"
+        "Merge the patches into one conflict-free patch. Return strict JSON only, with this schema:\n"
+        "{\n"
+        '  "evidence_summary": "<one short paragraph>",\n'
+        '  "sections": {\n'
+        '    "Visual Grounding": ["<general rule>", "..."],\n'
+        '    "Tool Use": ["<general rule>", "..."],\n'
+        '    "Verification": ["<general rule>", "..."],\n'
+        '    "Failure Avoidance": ["<general rule>", "..."]\n'
+        "  }\n"
+        "}\n"
+        "Keep at most 6 rules per section. Remove duplicates, conflicts, sample-specific facts, and weak advice."
+    )
+
+
+def _parse_patch_json(text: str) -> dict[str, Any]:
+    patch = parse_llm_json_object(text)
+    sections = patch.get("sections")
+    if not isinstance(sections, dict):
+        raise ValueError(f"Trace2Skill patch response must contain a sections object: {text[:300]}")
+    for section in SKILL_SECTIONS:
+        if section not in sections or not isinstance(sections[section], list):
+            raise ValueError(f"Trace2Skill patch section must be a list: {section}")
+    return {
+        "batch_id": patch.get("batch_id"),
+        "evidence_summary": str(patch.get("evidence_summary") or "").strip(),
+        "sections": {
+            section: [str(item).strip() for item in sections[section] if str(item).strip()]
+            for section in SKILL_SECTIONS
+        },
+    }
+
+
+def _lesson_batches(lesson_records: list[dict[str, Any]], batch_size: int) -> list[list[dict[str, Any]]]:
+    return [lesson_records[idx : idx + batch_size] for idx in range(0, len(lesson_records), batch_size)]
+
+
+def _build_patch(args, initial_skill: str, batch_idx: int, lesson_records: list[dict[str, Any]]) -> dict[str, Any]:
+    patch_path = _patch_path(args, batch_idx)
+    if patch_path.exists():
+        return read_json(patch_path)
+    print(f"[Trace2Skill] MAP patch batch {batch_idx}: {len(lesson_records)} record(s)")
+    patch = _parse_patch_json(
+        _chat_text(
+            args.model_name,
+            TRACE2SKILL_PATCH_SYSTEM_PROMPT,
+            _patch_prompt(initial_skill, batch_idx, lesson_records),
+            max_tokens=int(args.trace2skill_patch_max_tokens),
+        )
+    )
+    patch["batch_id"] = batch_idx
+    write_json(patch_path, patch, indent=2)
+    return patch
+
+
+def _build_patches(args, initial_skill: str, lesson_records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    batches = _lesson_batches(lesson_records, int(args.trace2skill_patch_batch_size))
+    max_workers = max(1, min(int(args.num_workers), len(batches)))
+    print(f"[Trace2Skill] MAP phase: {len(batches)} patch batch(es), {max_workers} worker(s).")
+    patches_by_idx: dict[int, dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(_build_patch, args, initial_skill, batch_idx, batch)
+            for batch_idx, batch in enumerate(batches)
+        ]
+        for future in as_completed(futures):
+            patch = future.result()
+            patches_by_idx[int(patch["batch_id"])] = patch
+    return [patches_by_idx[idx] for idx in sorted(patches_by_idx)]
+
+
+def _merge_patches(args, initial_skill: str, patches: list[dict[str, Any]]) -> dict[str, Any]:
+    merged_path = _merged_patch_path(args)
+    if merged_path.exists():
+        return read_json(merged_path)
+    print(f"[Trace2Skill] REDUCE phase: merging {len(patches)} patch(es).")
+    merged = _parse_patch_json(
+        _chat_text(
+            args.model_name,
+            TRACE2SKILL_CONSOLIDATION_SYSTEM_PROMPT,
+            _merge_prompt(initial_skill, patches),
+            max_tokens=int(args.trace2skill_merge_max_tokens),
+        )
+    )
+    write_json(merged_path, merged, indent=2)
+    return merged
+
+
+def _render_skill(initial_skill: str, merged_patch: dict[str, Any]) -> str:
+    lines = [initial_skill.rstrip(), "", "## Trace2Skill Evolved Rules"]
+    evidence_summary = str(merged_patch.get("evidence_summary") or "").strip()
+    if evidence_summary:
+        lines.extend(["", "### Evidence Summary", evidence_summary])
+    for section in SKILL_SECTIONS:
+        rules = merged_patch["sections"][section]
+        if rules:
+            lines.extend(["", f"### {section}"])
+            lines.extend(f"- {rule}" for rule in rules)
+    return "\n".join(lines).strip() + "\n"
+
+
+def _evolve_trace2skill_guide(config, args) -> str:
+    lesson_records = _collect_local_lessons(config, args)
+    if not lesson_records:
+        raise RuntimeError("Trace2Skill training produced no memory items.")
+    initial_skill = _initial_skill_text()
+    patches = _build_patches(args, initial_skill, lesson_records)
+    merged_patch = _merge_patches(args, initial_skill, patches)
+    guide = _render_skill(initial_skill, merged_patch)
+    _guide_path(args).write_text(guide, encoding="utf-8")
+    return guide
 
 
 def _build_trace2skill_guide(config, args) -> str:
     guide_path = _guide_path(args)
-    if guide_path.exists():
-        if getattr(args, "reuse_train_benchmark", ""):
-            print(f"[Trace2Skill] Reusing skill from {args.reuse_train_benchmark}: {guide_path}")
-        return guide_path.read_text(encoding="utf-8")
+    merged_patch_path = _merged_patch_path(args)
     if getattr(args, "reuse_train_benchmark", ""):
-        raise FileNotFoundError(
-            f"Missing reusable Trace2Skill skill for {args.benchmark}: {guide_path}. "
-            f"Run {args.reuse_train_benchmark} before {args.benchmark}."
-        )
-
-    lesson_records = _collect_local_lessons(config, args)
-    if not lesson_records:
-        guide_path.parent.mkdir(parents=True, exist_ok=True)
-        guide_path.write_text("", encoding="utf-8")
-        return ""
-
-    guide = _chat_text(
-        args.model_name,
-        TRACE2SKILL_CONSOLIDATION_SYSTEM_PROMPT,
-        _consolidation_prompt(lesson_records),
-        max_tokens=int(args.trace2skill_guide_max_tokens),
-    )
-    guide_path.parent.mkdir(parents=True, exist_ok=True)
-    guide_path.write_text(guide, encoding="utf-8")
-    return guide
+        if not (guide_path.exists() and merged_patch_path.exists()):
+            raise FileNotFoundError(
+                f"Missing reusable Trace2Skill skill for {args.benchmark}: {guide_path}. "
+                f"Run {args.reuse_train_benchmark} before {args.benchmark}."
+            )
+        print(f"[Trace2Skill] Reusing skill from {args.reuse_train_benchmark}: {guide_path}")
+        return guide_path.read_text(encoding="utf-8")
+    if guide_path.exists() and merged_patch_path.exists():
+        return guide_path.read_text(encoding="utf-8")
+    return _evolve_trace2skill_guide(config, args)
 
 
 def _format_trace2skill_guide(guide: str) -> str:
     if not guide.strip():
         return ""
     return (
-        "## Trace2Skill Adapted Skill\n"
         f"{guide.strip()}\n\n"
         "Use this guide as reusable strategy only. Always ground the final answer in the current image, "
         "question, and tool evidence.\n"

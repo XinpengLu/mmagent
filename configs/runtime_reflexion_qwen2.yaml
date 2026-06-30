@@ -1,0 +1,39 @@
+mode: test
+
+benchmarks:
+  - MMBrowseComp
+
+paths:
+  benchmark_processed: benchmark/processed
+  benchmark_split: benchmark/split
+  system_prompts: baseline/reflexion_prompts.yaml
+  tool_config: configs/tool_configs.yaml
+
+models:
+  reasoning_model_name: qwen3.6-chat
+  verifier_model_name: qwen-chat
+
+baseline:
+  name: reflexion
+  code_prompt: reflexion_tool_code
+  general_prompt: reflexion_tool_general
+  search_prompt: reflexion_tool_search
+  code_tools: code_interpreter
+  general_tools: "web_search, visit, code_interpreter"
+  search_tools: "web_search, image_search, visit, code_interpreter"
+  enable_function_calling: true
+  reflection_max_tokens: 512
+
+runtime:
+  num_workers: 8
+
+rollout:
+  per_sample: 4
+  max_tokens: 8192
+
+api:
+  openai_key_file: configs/keys/qwen_openai3.keys
+  openai_base_url: "https://api.llm.ustc.edu.cn/v1"
+  serpapi_key_file: configs/keys/serp.keys
+  jina_key_file: configs/keys/jina.keys
+  jina_proxy: "http://127.0.0.1:7890"

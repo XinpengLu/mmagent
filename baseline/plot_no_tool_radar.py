@@ -27,8 +27,8 @@ BENCHMARKS = [
 DEFAULT_MODELS = ["gpt-5.5", "qwen3.6-chat", "deepseek-v4-flash"]
 DEFAULT_METHODS = ["no_tool", "with_tool", "reflexion"]
 METHOD_LABELS = {
-    "no_tool": "No Tool",
-    "with_tool": "With Tool",
+    "no_tool": "CoT",
+    "with_tool": "ReAct",
     "reflexion": "Reflexion",
     "expel": "ExpeL",
     "trace2skill": "Trace2Skill",
@@ -47,6 +47,29 @@ def _parse_csv(raw: str | None, default: list[str]) -> list[str]:
     if not raw:
         return default
     return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _model_display_name(model: str) -> str:
+    parts = []
+    for part in model.split("-"):
+        lowered = part.lower()
+        if lowered.startswith("gpt"):
+            parts.append("GPT" + part[3:])
+        elif lowered.startswith("qwen"):
+            parts.append("Qwen" + part[4:])
+        elif lowered == "flash":
+            parts.append("Flash")
+        elif lowered == "chat":
+            parts.append("Chat")
+        elif lowered == "gpt":
+            parts.append("GPT")
+        elif lowered == "qwen":
+            parts.append("Qwen")
+        elif lowered in {"deepseek", "ds"}:
+            parts.append("DeepSeek")
+        elif lowered:
+            parts.append(part)
+    return "-".join(parts)
 
 
 def _metric_file(method_root: Path, benchmark: str) -> Path:
@@ -196,7 +219,7 @@ def _plot_radar_panel(
     ax.grid(color="#d9dee8", linewidth=0.85, alpha=0.76)
     ax.spines["polar"].set_color("#d1d5db")
     ax.spines["polar"].set_linewidth(0.9)
-    ax.set_title(f"{model}\n{metric_title}", y=1.18, fontweight="bold", color="#111827")
+    ax.set_title(f"{_model_display_name(model)}\n{metric_title}", y=1.18, fontweight="bold", color="#111827")
 
 
 def _load_model_metric_values(

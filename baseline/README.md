@@ -47,7 +47,7 @@ Intermediate files:
 
 ## Trace2Skill
 
-Uses the same benchmark-specific tool set as `with_tool`. It first runs one training rollout per sampled train item from `train.json`, distills trajectory-local lessons, consolidates them into one global skill guide, and injects that guide into every test rollout.
+Uses the same benchmark-specific tool set as `with_tool`. It first runs one training rollout per sampled train item from `train.json`, distills trajectory-local lessons, evolves local skill patches in parallel, merges the patches into a compact `SKILL.md`, and injects that evolved skill into every test rollout.
 
 ```bash
 python -m baseline.run --config configs/runtime_trace2skill_qwen.yaml
@@ -56,8 +56,11 @@ python -m baseline.run --config configs/runtime_trace2skill_qwen.yaml
 Intermediate files:
 
 - `train/`: one training rollout per sampled train item.
-- `train/trace2skill_local_lessons.json`: local lessons distilled from training trajectories.
-- `train/trace2skill_guide.md`: consolidated global skill guide injected at test time.
+- `train/trace2skill_items/*.json`: per-sample trajectory-local memory items.
+- `train/trace2skill_memory_items.json`: collected training memory records.
+- `train/trace2skill_patches/*.json`: MAP-stage local skill patches.
+- `train/trace2skill_merged_patch.json`: REDUCE-stage merged patch.
+- `train/SKILL.md`: final evolved skill injected at test time.
 
 For a quick smoke test:
 

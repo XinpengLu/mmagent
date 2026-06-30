@@ -31,7 +31,9 @@ baseline:
   enable_function_calling: true
   trace2skill_train_samples: 100
   trace2skill_lesson_max_tokens: 512
-  trace2skill_guide_max_tokens: 2048
+  trace2skill_patch_batch_size: 8
+  trace2skill_patch_max_tokens: 1024
+  trace2skill_merge_max_tokens: 2048
   reuse_train_benchmark_for_test_only:
     MMBrowseComp: BrowseComp-V3
     VisBrowse-Bench: BrowseComp-V3

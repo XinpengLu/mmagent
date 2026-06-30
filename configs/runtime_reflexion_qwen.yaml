@@ -1,11 +1,8 @@
 mode: test
 
 benchmarks:
-  - BrowseComp-V3
-  - AgentVista
-  - MMBrowseComp
+  #- MMBrowseComp
   - VisBrowse-Bench
-  - Agentic-MME
 
 paths:
   benchmark_processed: benchmark/processed
