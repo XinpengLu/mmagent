@@ -2,7 +2,10 @@ logs/
 output/
 api_usage/
 memory_bank/
-benchmark/
+benchmark/raw/
+benchmark/processed/
+benchmark/split/
+benchmark/split.zip
 benchmark_full/
 .env
 .env.*
