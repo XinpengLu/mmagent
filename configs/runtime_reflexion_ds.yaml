@@ -1,8 +1,8 @@
 mode: test
 
 benchmarks:
-  - TIR-Bench
-  - VisualToolBench
+  # - TIR-Bench
+  # - VisualToolBench
   - MMSearch-Plus
   - BrowseComp-V3
   - AgentVista
@@ -32,7 +32,7 @@ baseline:
   reflection_max_tokens: 512
 
 runtime:
-  num_workers: 8
+  num_workers: 12
 
 rollout:
   per_sample: 4

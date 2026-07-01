@@ -1,8 +1,8 @@
 mode: test
 
 benchmarks:
-  - BrowseComp-V3
-  - VisBrowse-Bench
+  # - BrowseComp-V3
+  # - VisBrowse-Bench
   - Agentic-MME
 
 paths:
@@ -36,7 +36,7 @@ rollout:
 
 api:
   # openai_base_url: "https://api.llm.ustc.edu.cn/v1"
-  openai_key_file: configs/keys/openai.keys
+  openai_key_file: configs/keys/openai2.keys
   openai_base_url: "https://card.nassaapi.xyz/v1"
   serpapi_key_file: configs/keys/serp.keys
   jina_key_file: configs/keys/jina.keys
