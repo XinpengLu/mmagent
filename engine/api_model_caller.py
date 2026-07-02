@@ -340,6 +340,8 @@ def _handle_model_action(action, data, node, tool_handler, global_turn_idx):
             node.tool_transient_failure = True
             node.mark_final(f"Error: tool_transient_failure: {exc}")
             return "invalid_tool_call"
+        if getattr(node, "tool_transient_failure", False):
+            return "invalid_tool_call"
         if result.get('feedback_messages'):
             node.api_conversation_history.extend(result['feedback_messages'])
         return bool(result.get('skip_processing'))

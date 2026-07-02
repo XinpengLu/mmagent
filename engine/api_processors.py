@@ -405,6 +405,15 @@ def _handle_model_error_response(current_node, response_text, save_dir, turn):
         return True
 
     if response_text is None:
+        if getattr(current_node, "tool_transient_failure", False):
+            _save_turn_error(
+                save_dir,
+                turn,
+                current_node.final_answer or "Error: tool_transient_failure",
+                current_node.final_answer or "tool_transient_failure",
+                "tool_transient_failure",
+            )
+            return True
         error_msg = "Error: Empty response from model."
         print(f"Warning: {error_msg} at turn {turn}")
         current_node.mark_final(error_msg)

@@ -16,6 +16,7 @@ from skill import update_memory_usage_after_sample
 from utils.transient import (
     result_has_transient_failure,
     text_has_transient_failure,
+    trajectory_file_has_transient_failure,
     rollout_dir_has_transient_failure,
 )
 from main_flow.memory import (
@@ -218,6 +219,11 @@ def _load_completed_rollout_result(sample_dir, rollout_dir, rollout_idx=None):
     traj_file = os.path.join(rollout_dir, TRAJECTORY_FILENAME)
     metrics_file = os.path.join(rollout_dir, ROLLOUT_METRICS_FILENAME)
     if not (os.path.exists(traj_file) and os.path.exists(metrics_file)):
+        return None
+
+    if trajectory_file_has_transient_failure(traj_file):
+        print(f"  [Pipeline] Existing rollout has transient failure and will be rerun: {rollout_dir}")
+        clean_rollout_artifacts(rollout_dir)
         return None
 
     num_turns = _count_trajectory_turns(traj_file)

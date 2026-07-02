@@ -29,6 +29,23 @@ TRANSIENT_TOOL_FAILURE_MARKERS = (
     "failed to start kernel",
     "kernel connection file not created",
     "kernel is not ready",
+    "no usable jina key left",
+    "no usable serp key left",
+    "no usable openai key left",
+    "serper.dev api key not found",
+    "jina api not available",
+    "insufficientbalanceerror",
+    "account balance not enough",
+    "payment required",
+    "insufficient quota",
+    "insufficient_quota",
+    "quota exceeded",
+    "quota limit",
+    "credit exhausted",
+    "billing hard limit",
+    "api key exhausted",
+    "api key quota",
+    "api key balance",
 )
 
 
@@ -48,6 +65,14 @@ def text_has_transient_tool_failure(text: Any) -> bool:
 
 def text_has_transient_failure(text: Any) -> bool:
     return text_has_transient_api_failure(text) or text_has_transient_tool_failure(text)
+
+
+def trajectory_file_has_transient_failure(path: str) -> bool:
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            return text_has_transient_failure(f.read())
+    except OSError:
+        return False
 
 
 def result_has_transient_failure(result: Dict[str, Any]) -> bool:

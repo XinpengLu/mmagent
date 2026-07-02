@@ -7,6 +7,7 @@ import shutil
 from PIL import Image
 from utils.image_utils import estimate_tokens, pil_to_base64_data_uri, process_image
 from utils.artifacts import save_trajectory
+from utils.transient import text_has_transient_tool_failure
 from qwen_vl_utils import fetch_image # type: ignore
 from tools import get_tool
 
@@ -310,6 +311,12 @@ class APIToolHandler:
             },
         })
 
+    def _mark_transient_tool_result(self, node, tool_result):
+        if not text_has_transient_tool_failure(tool_result):
+            return
+        node.tool_transient_failure = True
+        node.mark_final(f"Error: tool_transient_failure: {tool_result}")
+
     def _save_tool_images(self, node, turn_idx, tool_name, new_images):
         for image_name, pil_image in new_images:
             image_path = os.path.join(self.save_dir, f"{image_name}.jpg")
@@ -402,6 +409,9 @@ class APIToolHandler:
         try:
             tool_result = self._call_tool(tool_name, parameters, node)
             self._save_tool_call_event(node, turn_idx, tool_name, parameters, tool_result)
+            self._mark_transient_tool_result(node, tool_result)
+            if getattr(node, "tool_transient_failure", False):
+                return self._error_result(str(tool_result), tool_call_id)
             new_images, processed_result = self.process_tool_output_for_images(
                 tool_result, tool_name, node
             )
