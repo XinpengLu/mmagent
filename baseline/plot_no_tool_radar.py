@@ -25,13 +25,15 @@ BENCHMARKS = [
     "Agentic-MME",
 ]
 DEFAULT_MODELS = ["gpt-5.5", "qwen3.6-chat", "deepseek-v4-flash"]
-DEFAULT_METHODS = ["no_tool", "with_tool", "reflexion"]
+DEFAULT_METHODS = ["no_tool", "with_tool", "reflexion", "expel", "trace2skill", "xskill", "hive"]
 METHOD_LABELS = {
     "no_tool": "CoT",
     "with_tool": "ReAct",
     "reflexion": "Reflexion",
     "expel": "ExpeL",
     "trace2skill": "Trace2Skill",
+    "xskill": "XSkill",
+    "hive": "HIVE",
 }
 METHOD_STYLES = {
     "no_tool": {"color": "#2563eb", "marker": "o", "linestyle": "-"},
@@ -39,6 +41,8 @@ METHOD_STYLES = {
     "reflexion": {"color": "#dc2626", "marker": "^", "linestyle": "-"},
     "expel": {"color": "#9333ea", "marker": "D", "linestyle": "-"},
     "trace2skill": {"color": "#f97316", "marker": "P", "linestyle": "-"},
+    "xskill": {"color": "#0891b2", "marker": "X", "linestyle": "-"},
+    "hive": {"color": "#111827", "marker": "*", "linestyle": "-"},
 }
 ROTATE_LABEL_180 = {"Agentic-MME", "VisBrowse-Bench"}
 
@@ -72,12 +76,22 @@ def _model_display_name(model: str) -> str:
     return "-".join(parts)
 
 
-def _metric_file(method_root: Path, benchmark: str) -> Path:
-    return method_root / benchmark / "test" / "metrics_at_k.json"
+def _metric_files(method_root: Path, benchmark: str) -> list[Path]:
+    return [
+        method_root / benchmark / "test" / "metrics_at_k.json",
+        method_root / benchmark / "output" / "test" / "metrics_at_k.json",
+    ]
+
+
+def _metric_file(method_root: Path, benchmark: str) -> Path | None:
+    for path in _metric_files(method_root, benchmark):
+        if path.exists():
+            return path
+    return None
 
 
 def _method_has_any_metric(method_root: Path) -> bool:
-    return any(_metric_file(method_root, benchmark).exists() for benchmark in BENCHMARKS)
+    return any(_metric_file(method_root, benchmark) is not None for benchmark in BENCHMARKS)
 
 
 def _available_methods(model_root: Path, requested_methods: list[str]) -> list[str]:
@@ -102,7 +116,7 @@ def _load_metric(method_root: Path, metric_name: str, k: int = 4) -> list[float]
     values = []
     for benchmark in BENCHMARKS:
         metrics_path = _metric_file(method_root, benchmark)
-        if not metrics_path.exists():
+        if metrics_path is None:
             values.append(0.0)
             continue
         with metrics_path.open("r", encoding="utf-8") as f:

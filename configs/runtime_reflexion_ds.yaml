@@ -3,12 +3,10 @@ mode: test
 benchmarks:
   # - TIR-Bench
   # - VisualToolBench
-  - MMSearch-Plus
-  - BrowseComp-V3
-  - AgentVista
-  - MMBrowseComp
+  # - MMSearch-Plus
+  # - BrowseComp-V3
+  # - AgentVista
   - VisBrowse-Bench
-  - Agentic-MME
 
 paths:
   benchmark_processed: benchmark/processed
@@ -17,6 +15,8 @@ paths:
   tool_config: configs/tool_configs.yaml
 
 models:
+  # reasoning_model_name: deepseek-v4-flash-ascend
+  # verifier_model_name: deepseek-v4-flash-ascend
   reasoning_model_name: deepseek-v4-flash
   verifier_model_name: deepseek-v4-flash
 
@@ -32,13 +32,15 @@ baseline:
   reflection_max_tokens: 512
 
 runtime:
-  num_workers: 12
+  num_workers: 2
 
 rollout:
   per_sample: 4
   max_tokens: 8192
 
 api:
+  # openai_key_file: configs/keys/qwen_openai.keys
+  # openai_base_url: "https://api.llm.ustc.edu.cn/v1"
   openai_key_file: configs/keys/openai.keys
   openai_base_url: "https://card.nassaapi.xyz/v1"
   serpapi_key_file: configs/keys/serp.keys

@@ -1,7 +1,7 @@
 mode: test
 
 benchmarks:
-  - MMBrowseComp
+  - Agentic-MME
 
 paths:
   benchmark_processed: benchmark/processed
@@ -10,8 +10,10 @@ paths:
   tool_config: configs/tool_configs.yaml
 
 models:
-  reasoning_model_name: qwen3.6-chat
-  verifier_model_name: qwen-chat
+  reasoning_model_name: deepseek-v4-flash
+  verifier_model_name: deepseek-v4-flash
+  # reasoning_model_name: deepseek-v4-flash-ascend
+  # verifier_model_name: deepseek-v4-flash-ascend
 
 baseline:
   name: reflexion
@@ -32,8 +34,10 @@ rollout:
   max_tokens: 8192
 
 api:
-  openai_key_file: configs/keys/qwen_openai3.keys
-  openai_base_url: "https://api.llm.ustc.edu.cn/v1"
+  openai_key_file: configs/keys/openai2.keys
+  openai_base_url: "https://card.nassaapi.xyz/v1"
+  # openai_key_file: configs/keys/qwen_openai2.keys
+  # openai_base_url: "https://api.llm.ustc.edu.cn/v1"
   serpapi_key_file: configs/keys/serp.keys
   jina_key_file: configs/keys/jina.keys
   jina_proxy: "http://127.0.0.1:7890"

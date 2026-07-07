@@ -39,21 +39,42 @@ app.launch_new_instance()
 """
 
 
+def _shutdown_kernel_client(kc) -> None:
+    try:
+        kc.shutdown()
+    except Exception:
+        pass
+    try:
+        kc.stop_channels()
+    except Exception:
+        pass
+
+
+def _terminate_kernel_process(process) -> None:
+    if process is None or process.poll() is not None:
+        return
+    try:
+        process.terminate()
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+            process.wait(timeout=2)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
 def _kill_kernels_and_subprocesses(_sig_num=None, _frame=None):
     """Clean up all kernels and subprocesses."""
     with _KERNEL_LOCK:
         for v in list(_KERNEL_CLIENTS.values()):
-            try:
-                v.shutdown()
-            except:
-                pass
+            _shutdown_kernel_client(v)
         _KERNEL_CLIENTS.clear()
         
         for v in list(_MISC_SUBPROCESSES.values()):
-            try:
-                v.terminate()
-            except:
-                pass
+            _terminate_kernel_process(v)
         _MISC_SUBPROCESSES.clear()
 
 
@@ -353,11 +374,8 @@ Pre-installed packages:
                 _KERNEL_CLIENTS[kernel_id] = new_kc
                 _MISC_SUBPROCESSES[kernel_id] = new_subproc
                 return new_kc
-            try:
-                new_kc.shutdown()
-                new_subproc.terminate()
-            except Exception:
-                pass
+            _shutdown_kernel_client(new_kc)
+            _terminate_kernel_process(new_subproc)
             return _KERNEL_CLIENTS[kernel_id]
 
     def _run_code_with_kernel(self, full_code, existing_image_files, kernel_id, tool_image_count):
@@ -442,10 +460,7 @@ Pre-installed packages:
             raise
 
     def _terminate_process_quietly(self, process):
-        try:
-            process.terminate()
-        except Exception:
-            pass
+        _terminate_kernel_process(process)
 
     def _wait_for_connection_file(self, connection_file, kernel_process):
         max_wait = KERNEL_INIT_MAX_WAIT
@@ -497,11 +512,8 @@ Pre-installed packages:
             print(f"[CodeInterpreter] ERROR - Failed to initialize kernel client: {e}")
             import traceback
             traceback.print_exc()
-            try:
-                kc.shutdown()
-            except:
-                pass
-            self._terminate_process_quietly(kernel_process)
+            _shutdown_kernel_client(kc)
+            _terminate_kernel_process(kernel_process)
             raise
     
     def _is_valid_output(self, msg_type: str, msg: dict) -> bool:
@@ -587,15 +599,14 @@ Pre-installed packages:
                     
             except Exception as e:
                 print(f"[CodeInterpreter] Failed to terminate kernel process: {e}")
+
+        _terminate_kernel_process(kernel_process)
         
         # Method 3: Clean kernel references in global dictionary (ensure kernel is recreated on next call)
         try:
             with _KERNEL_LOCK:
                 if kernel_id in _KERNEL_CLIENTS:
-                    try:
-                        _KERNEL_CLIENTS[kernel_id].shutdown()
-                    except:
-                        pass
+                    _shutdown_kernel_client(_KERNEL_CLIENTS[kernel_id])
                     del _KERNEL_CLIENTS[kernel_id]
                     print(f"[CodeInterpreter] Kernel client removed from cache")
                 if kernel_id in _MISC_SUBPROCESSES:
@@ -862,7 +873,8 @@ except Exception as _xskill_exc:
         
         png_bytes = base64.b64decode(image_base64)
         bytes_io = io.BytesIO(png_bytes)
-        Image.open(bytes_io).save(local_image_file, 'png')
+        with Image.open(bytes_io) as image:
+            image.save(local_image_file, 'png')
         
         return local_image_file
     
@@ -873,16 +885,10 @@ except Exception as _xskill_exc:
             
             with _KERNEL_LOCK:
                 if kernel_id in _KERNEL_CLIENTS:
-                    try:
-                        _KERNEL_CLIENTS[kernel_id].shutdown()
-                    except:
-                        pass
+                    _shutdown_kernel_client(_KERNEL_CLIENTS[kernel_id])
                     del _KERNEL_CLIENTS[kernel_id]
                 if kernel_id in _MISC_SUBPROCESSES:
-                    try:
-                        _MISC_SUBPROCESSES[kernel_id].terminate()
-                    except:
-                        pass
+                    _terminate_kernel_process(_MISC_SUBPROCESSES[kernel_id])
                     del _MISC_SUBPROCESSES[kernel_id]
         except:
             # Ignore all errors to avoid exceptions during destruction

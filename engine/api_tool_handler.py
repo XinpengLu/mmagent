@@ -87,7 +87,8 @@ class APIToolHandler:
         if not os.path.exists(resolved_ref):
             print(f"Warning: Image file not found: {resolved_ref}")
             return resolved_ref, None
-        return resolved_ref, Image.open(resolved_ref)
+        with Image.open(resolved_ref) as image:
+            return resolved_ref, image.copy()
 
     def _process_tool_image(self, pil_image):
         original_size = pil_image.width * pil_image.height

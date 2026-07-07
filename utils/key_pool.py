@@ -31,6 +31,14 @@ KEY_FILE_ENV = {
 
 OPENAI_ROTATE_MARKERS = (
     "每小时请求数已达上限",
+    "当前请求过于频繁",
+    "自动恢复",
+    "\u6bcf\u5c0f\u65f6\u8bf7\u6c42\u6570\u5df2\u8fbe\u4e0a\u9650",
+    "\u5f53\u524d\u8bf7\u6c42\u8fc7\u4e8e\u9891\u7e41",
+    "\u81ea\u52a8\u6062\u590d",
+    "\u6574\u70b9",
+    "rate_limit_exceeded",
+    "每小时请求数已达上限",
     "requests per hour",
     "hourly request",
     "request quota",

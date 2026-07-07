@@ -1,14 +1,8 @@
 mode: train_test
 
 benchmarks:
-  - TIR-Bench
   - VisualToolBench
   - MMSearch-Plus
-  - BrowseComp-V3
-  - AgentVista
-  - MMBrowseComp
-  - VisBrowse-Bench
-  - Agentic-MME
 
 paths:
   benchmark_processed: benchmark/processed
@@ -19,6 +13,8 @@ paths:
 models:
   reasoning_model_name: deepseek-v4-flash
   verifier_model_name: deepseek-v4-flash
+  # reasoning_model_name: deepseek-v4-flash-ascend
+  # verifier_model_name: deepseek-v4-flash-ascend
 
 baseline:
   name: trace2skill
@@ -32,14 +28,14 @@ baseline:
   trace2skill_train_samples: 100
   trace2skill_lesson_max_tokens: 512
   trace2skill_patch_batch_size: 8
-  trace2skill_patch_max_tokens: 1024
-  trace2skill_merge_max_tokens: 2048
+  trace2skill_patch_max_tokens: 20000
+  trace2skill_merge_max_tokens: 20000
   reuse_train_benchmark_for_test_only:
     MMBrowseComp: BrowseComp-V3
     VisBrowse-Bench: BrowseComp-V3
 
 runtime:
-  num_workers: 1
+  num_workers: 12
 
 rollout:
   per_sample: 4
@@ -48,6 +44,8 @@ rollout:
 api:
   openai_key_file: configs/keys/openai.keys
   openai_base_url: "https://card.nassaapi.xyz/v1"
+  # openai_key_file: configs/keys/qwen_openai4.keys
+  # openai_base_url: "https://api.llm.ustc.edu.cn/v1"
   serpapi_key_file: configs/keys/serp.keys
   jina_key_file: configs/keys/jina.keys
   jina_proxy: "http://127.0.0.1:7890"

@@ -17,8 +17,10 @@ paths:
   tool_config: configs/tool_configs.yaml
 
 models:
-  reasoning_model_name: deepseek-v4-flash
-  verifier_model_name: deepseek-v4-flash
+  # reasoning_model_name: deepseek-v4-flash
+  # verifier_model_name: deepseek-v4-flash
+  reasoning_model_name: deepseek-v4-flash-ascend
+  verifier_model_name: deepseek-v4-flash-ascend
 
 baseline:
   name: expel
@@ -31,21 +33,23 @@ baseline:
   enable_function_calling: true
   expel_train_samples: 100
   expel_max_rules: 20
-  expel_rule_max_tokens: 512
+  expel_rule_max_tokens: 20000
   reuse_train_benchmark_for_test_only:
     MMBrowseComp: BrowseComp-V3
     VisBrowse-Bench: BrowseComp-V3
 
 runtime:
-  num_workers: 8
+  num_workers: 4
 
 rollout:
   per_sample: 4
-  max_tokens: 8192
+  max_tokens: 12000
 
 api:
-  openai_key_file: configs/keys/openai.keys
-  openai_base_url: "https://card.nassaapi.xyz/v1"
+  # openai_key_file: configs/keys/openai2.keys
+  # openai_base_url: "https://card.nassaapi.xyz/v1"
+  openai_key_file: configs/keys/qwen_openai2.keys
+  openai_base_url: "https://api.llm.ustc.edu.cn/v1"
   serpapi_key_file: configs/keys/serp.keys
   jina_key_file: configs/keys/jina.keys
   jina_proxy: "http://127.0.0.1:7890"
