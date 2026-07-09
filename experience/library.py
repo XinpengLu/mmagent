@@ -135,8 +135,8 @@ class _ExperienceMemoryProvider:
             self._retriever = ExperienceRetriever(
                 experiences=self.experiences,
                 embedding_model=os.environ.get("EXPERIENCE_EMBEDDING_MODEL", "text-embedding-3-small"),
-                embedding_api_key=os.environ.get("EXPERIENCE_EMBEDDING_API_KEY") or os.environ.get("OPENAI_API_KEY"),
-                embedding_endpoint=os.environ.get("EXPERIENCE_EMBEDDING_ENDPOINT") or os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1"),
+                embedding_api_key=os.environ.get("EXPERIENCE_EMBEDDING_API_KEY"),
+                embedding_endpoint=os.environ.get("EXPERIENCE_EMBEDDING_ENDPOINT"),
                 enable_cache=False,
             )
         return self._retriever

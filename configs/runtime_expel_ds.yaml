@@ -1,4 +1,4 @@
-mode: train_test
+﻿mode: train_test
 
 benchmarks:
   - TIR-Bench
@@ -46,10 +46,13 @@ rollout:
   max_tokens: 12000
 
 api:
-  # openai_key_file: configs/keys/openai2.keys
-  # openai_base_url: "https://card.nassaapi.xyz/v1"
-  openai_key_file: configs/keys/qwen_openai2.keys
-  openai_base_url: "https://api.llm.ustc.edu.cn/v1"
+  # reasoning_key_file: configs/keys/openai2.keys
+  # reasoning_base_url: "https://card.nassaapi.xyz/v1"
+  reasoning_key_file: configs/keys/qwen_openai2.keys
+  reasoning_base_url: "https://api.llm.ustc.edu.cn/v1"
+  verifier_key_file: configs/keys/qwen_openai2.keys
+  verifier_base_url: "https://api.llm.ustc.edu.cn/v1"
   serpapi_key_file: configs/keys/serp.keys
   jina_key_file: configs/keys/jina.keys
   jina_proxy: "http://127.0.0.1:7890"
+

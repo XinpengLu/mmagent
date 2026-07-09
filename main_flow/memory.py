@@ -82,10 +82,7 @@ def _available_experience_ids(experiences: Dict[str, Any]) -> Optional[set]:
 
 
 def _embedding_endpoint(args) -> str:
-    endpoint = (
-        os.environ.get("EXPERIENCE_EMBEDDING_ENDPOINT")
-        or os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1")
-    )
+    endpoint = os.environ.get("EXPERIENCE_EMBEDDING_ENDPOINT", "")
     if endpoint and not endpoint.endswith("/v1"):
         endpoint = endpoint.rstrip("/") + "/v1"
     return endpoint
@@ -96,10 +93,7 @@ def _embedding_config(args) -> Dict[str, Any]:
         "enable_cache": True,
         "cache_dir": os.path.dirname(args.experience_library),
         "embedding_model": os.environ.get("EXPERIENCE_EMBEDDING_MODEL", "text-embedding-3-small"),
-        "embedding_api_key": (
-            os.environ.get("EXPERIENCE_EMBEDDING_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")
-        ),
+        "embedding_api_key": os.environ.get("EXPERIENCE_EMBEDDING_API_KEY"),
         "embedding_endpoint": _embedding_endpoint(args),
     }
 
@@ -291,10 +285,7 @@ def _retrieve_skills(query: _MemoryQuery, args, experience_retriever, retrieval_
         available_experience_ids=_available_experience_ids(all_experiences),
         query_metadata_tags=query.metadata_tags,
         embedding_model=os.environ.get("EXPERIENCE_EMBEDDING_MODEL", "text-embedding-3-small"),
-        embedding_api_key=(
-            os.environ.get("EXPERIENCE_EMBEDDING_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")
-        ),
+        embedding_api_key=os.environ.get("EXPERIENCE_EMBEDDING_API_KEY"),
         embedding_endpoint=_embedding_endpoint(args),
         enable_cache=True,
     )

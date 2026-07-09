@@ -12,19 +12,19 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _LOCK = threading.Lock()
 
 ENV_BY_POOL = {
-    "openai": (
-        "OPENAI_API_KEY",
-        "REASONING_API_KEY",
-        "VERIFIER_API_KEY",
-        "EXPERIENCE_API_KEY",
-        "EXPERIENCE_EMBEDDING_API_KEY",
-    ),
+    "reasoning": ("REASONING_API_KEY",),
+    "verifier": ("VERIFIER_API_KEY",),
+    "experience": ("EXPERIENCE_API_KEY",),
+    "experience_embedding": ("EXPERIENCE_EMBEDDING_API_KEY",),
     "serp": ("SERPAPI_KEY",),
     "jina": ("JINA_API_KEY",),
 }
 
 KEY_FILE_ENV = {
-    "openai": "OPENAI_KEY_FILE",
+    "reasoning": "REASONING_KEY_FILE",
+    "verifier": "VERIFIER_KEY_FILE",
+    "experience": "EXPERIENCE_KEY_FILE",
+    "experience_embedding": "EXPERIENCE_EMBEDDING_KEY_FILE",
     "serp": "SERPAPI_KEY_FILE",
     "jina": "JINA_KEY_FILE",
 }

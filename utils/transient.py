@@ -31,7 +31,7 @@ TRANSIENT_TOOL_FAILURE_MARKERS = (
     "kernel is not ready",
     "no usable jina key left",
     "no usable serp key left",
-    "no usable openai key left",
+    "no usable reasoning key left",
     "serper.dev api key not found",
     "jina api not available",
     "insufficientbalanceerror",

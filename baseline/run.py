@@ -51,6 +51,32 @@ BASELINE_CONFIG_ONLY_FIELDS = {
     "reuse_train_benchmark_for_test_only",
 }
 
+API_KEY_POOLS = (
+    "reasoning",
+    "verifier",
+    "serp",
+    "jina",
+)
+
+API_ROLES = {
+    "REASONING": ("reasoning", "REASONING_END_POINT", "chat"),
+    "VERIFIER": ("verifier", "VERIFIER_END_POINT", "base"),
+}
+
+KEY_FILE_ENV_BY_POOL = {
+    "reasoning": "REASONING_KEY_FILE",
+    "verifier": "VERIFIER_KEY_FILE",
+    "serp": "SERPAPI_KEY_FILE",
+    "jina": "JINA_KEY_FILE",
+}
+
+API_KEY_ENV_BY_POOL = {
+    "reasoning": "REASONING_API_KEY",
+    "verifier": "VERIFIER_API_KEY",
+    "serp": "SERPAPI_KEY",
+    "jina": "JINA_API_KEY",
+}
+
 
 def _load_yaml(path: Path) -> dict[str, Any]:
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -116,18 +142,36 @@ def _flatten_settings(settings: dict[str, Any]) -> dict[str, str]:
 
 
 def _apply_key_files(env: dict[str, str]) -> None:
-    if env.get("OPENAI_KEY_FILE"):
-        env["OPENAI_API_KEY"] = configure_key_file("openai", env["OPENAI_KEY_FILE"])
-    if env.get("SERPAPI_KEY_FILE"):
-        env["SERPAPI_KEY"] = configure_key_file("serp", env["SERPAPI_KEY_FILE"])
-    if env.get("JINA_KEY_FILE"):
-        env["JINA_API_KEY"] = configure_key_file("jina", env["JINA_KEY_FILE"])
+    for pool in API_KEY_POOLS:
+        key_file = env.get(KEY_FILE_ENV_BY_POOL[pool])
+        if key_file:
+            env[API_KEY_ENV_BY_POOL[pool]] = configure_key_file(pool, key_file)
+
+
+def _base_url(env: dict[str, str], prefix: str) -> str:
+    return (env.get(f"{prefix}_BASE_URL") or "").rstrip("/")
+
+
+def _chat_url(base_url: str) -> str:
+    return f"{base_url}/chat/completions" if base_url else ""
+
+
+def _apply_role_api_config(env: dict[str, str]) -> dict[str, str]:
+    for prefix, (pool, endpoint_key, endpoint_kind) in API_ROLES.items():
+        if not env.get(f"{prefix}_API_KEY"):
+            key_file = env.get(f"{prefix}_KEY_FILE")
+            if key_file:
+                env[f"{prefix}_API_KEY"] = configure_key_file(pool, key_file)
+
+        base_url = _base_url(env, prefix)
+        if base_url:
+            env[endpoint_key] = _chat_url(base_url) if endpoint_kind == "chat" else base_url
+
+    return env
 
 
 def _apply_baseline_env(runtime: RuntimeConfig) -> None:
-    api_key = runtime.compat_env["OPENAI_API_KEY"]
-    base_url = runtime.compat_env["OPENAI_BASE_URL"].rstrip("/")
-    chat_url = f"{base_url}/chat/completions"
+    env = _apply_role_api_config(dict(runtime.compat_env))
     os.environ.update(
         {
             "DATA_ROOT": str(runtime.paths.data_root),
@@ -137,16 +181,9 @@ def _apply_baseline_env(runtime: RuntimeConfig) -> None:
             "LOG_ROOT": str(runtime.paths.log_root),
             "SYSTEM_PROMPTS_PATH": str(runtime.paths.system_prompts),
             "TOOL_CONFIG_PATH": str(runtime.paths.tool_config),
-            "OPENAI_BASE_URL": base_url,
-            "OPENAI_API_BASE": base_url,
-            "OPENAI_CHAT_COMPLETIONS_URL": chat_url,
-            "REASONING_API_KEY": api_key,
-            "REASONING_END_POINT": chat_url,
-            "VERIFIER_API_KEY": api_key,
-            "VERIFIER_END_POINT": base_url,
         }
     )
-    os.environ.update(runtime.compat_env)
+    os.environ.update(env)
 
 
 def _baseline_prompt_and_tools(benchmark: str, settings: dict[str, Any]) -> tuple[str, str]:

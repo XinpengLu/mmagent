@@ -325,7 +325,7 @@ def _try_single_api(api_key: str, end_point: str, model_name: str, messages: lis
 
         if response.status_code == 429:
             if openai_should_rotate(response.status_code, _response_error_message(response)):
-                api_key = rotate_current_key("openai", api_key)
+                api_key = rotate_current_key("reasoning", api_key)
                 continue
             should_retry, last_error = _retry_after_rate_limit(api_name, attempt, max_retries)
             if should_retry:
@@ -337,7 +337,7 @@ def _try_single_api(api_key: str, end_point: str, model_name: str, messages: lis
             return result, None
 
         if error_type == "http_error" and openai_should_rotate(response.status_code, _response_error_message(response)):
-            api_key = rotate_current_key("openai", api_key)
+            api_key = rotate_current_key("reasoning", api_key)
             continue
 
         should_retry, last_error = _retry_after_parse_error(response, api_name, error_type, attempt, max_retries)

@@ -1,4 +1,4 @@
-mode: test
+﻿mode: test
 
 benchmarks:
   - TIR-Bench
@@ -34,5 +34,8 @@ rollout:
   max_tokens: 8192
 
 api:
-  openai_key_file: configs/keys/openai.keys
-  openai_base_url: "https://card.nassaapi.xyz/v1"
+  reasoning_key_file: configs/keys/openai.keys
+  reasoning_base_url: "https://card.nassaapi.xyz/v1"
+  verifier_key_file: configs/keys/openai.keys
+  verifier_base_url: "https://card.nassaapi.xyz/v1"
+

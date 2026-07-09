@@ -18,12 +18,18 @@ RUNTIME_CONFIG_PATH = CONFIG_DIR / "runtime.yaml"
 _ACTIVE_RUNTIME_CONFIG: RuntimeConfig | None = None
 
 REQUIRED_ENV_KEYS = (
-    "OPENAI_API_KEY",
-    "OPENAI_BASE_URL",
     "REASONING_MODEL_NAME",
+    "REASONING_API_KEY",
+    "REASONING_END_POINT",
     "VERIFIER_MODEL_NAME",
+    "VERIFIER_API_KEY",
+    "VERIFIER_END_POINT",
     "EXPERIENCE_MODEL_NAME",
+    "EXPERIENCE_API_KEY",
+    "EXPERIENCE_END_POINT",
     "EXPERIENCE_EMBEDDING_MODEL",
+    "EXPERIENCE_EMBEDDING_API_KEY",
+    "EXPERIENCE_EMBEDDING_ENDPOINT",
     "ENABLE_FUNCTION_CALLING",
     "NUM_WORKERS",
     "ROLLOUTS_PER_SAMPLE",
@@ -38,6 +44,40 @@ COMPAT_ENV_ALIASES = {
     "ROLLOUT_PER_SAMPLE": "ROLLOUTS_PER_SAMPLE",
     "EXPERIENCE_FAST_PRUNE_ENABLED": "ENABLE_FAST_EXPERIENCE_LIMIT_PRUNE",
     "EXPERIENCE_FAST_PRUNE_MAX_OVERFLOW": "FAST_EXPERIENCE_PRUNE_MAX_OVERFLOW",
+}
+
+API_KEY_POOLS = (
+    "reasoning",
+    "verifier",
+    "experience",
+    "experience_embedding",
+    "serp",
+    "jina",
+)
+
+API_ROLES = {
+    "REASONING": ("reasoning", "REASONING_END_POINT", "chat"),
+    "VERIFIER": ("verifier", "VERIFIER_END_POINT", "base"),
+    "EXPERIENCE": ("experience", "EXPERIENCE_END_POINT", "chat"),
+    "EXPERIENCE_EMBEDDING": ("experience_embedding", "EXPERIENCE_EMBEDDING_ENDPOINT", "base"),
+}
+
+KEY_FILE_ENV_BY_POOL = {
+    "reasoning": "REASONING_KEY_FILE",
+    "verifier": "VERIFIER_KEY_FILE",
+    "experience": "EXPERIENCE_KEY_FILE",
+    "experience_embedding": "EXPERIENCE_EMBEDDING_KEY_FILE",
+    "serp": "SERPAPI_KEY_FILE",
+    "jina": "JINA_KEY_FILE",
+}
+
+API_KEY_ENV_BY_POOL = {
+    "reasoning": "REASONING_API_KEY",
+    "verifier": "VERIFIER_API_KEY",
+    "experience": "EXPERIENCE_API_KEY",
+    "experience_embedding": "EXPERIENCE_EMBEDDING_API_KEY",
+    "serp": "SERPAPI_KEY",
+    "jina": "JINA_API_KEY",
 }
 
 
@@ -137,14 +177,12 @@ def _load_runtime_paths(root: Path, payload: dict[str, Any], source: Path) -> Ru
     )
 
 
-def _openai_api_config() -> tuple[str, str, str]:
-    api_key = os.environ["OPENAI_API_KEY"]
-    base_url = os.environ["OPENAI_BASE_URL"].rstrip("/")
-    chat_url = f"{base_url}/chat/completions"
-    os.environ["OPENAI_BASE_URL"] = base_url
-    os.environ["OPENAI_API_BASE"] = base_url
-    os.environ["OPENAI_CHAT_COMPLETIONS_URL"] = chat_url
-    return api_key, base_url, chat_url
+def _base_url(env: dict[str, str], prefix: str) -> str:
+    return (env.get(f"{prefix}_BASE_URL") or "").rstrip("/")
+
+
+def _chat_url(base_url: str) -> str:
+    return f"{base_url}/chat/completions" if base_url else ""
 
 
 def _load_runtime_settings(payload: dict[str, Any], source: Path) -> dict[str, Any]:
@@ -179,17 +217,23 @@ def _flatten_compat_env(settings: dict[str, Any]) -> dict[str, str]:
 
 
 def _apply_key_files(env: dict[str, str]) -> None:
-    key_files = {
-        "openai": env.get("OPENAI_KEY_FILE"),
-        "serp": env.get("SERPAPI_KEY_FILE"),
-        "jina": env.get("JINA_KEY_FILE"),
-    }
-    if key_files["openai"]:
-        env["OPENAI_API_KEY"] = configure_key_file("openai", key_files["openai"])
-    if key_files["serp"]:
-        env["SERPAPI_KEY"] = configure_key_file("serp", key_files["serp"])
-    if key_files["jina"]:
-        env["JINA_API_KEY"] = configure_key_file("jina", key_files["jina"])
+    for pool in API_KEY_POOLS:
+        key_file = env.get(KEY_FILE_ENV_BY_POOL[pool])
+        if key_file:
+            env[API_KEY_ENV_BY_POOL[pool]] = configure_key_file(pool, key_file)
+
+
+def _apply_role_api_config(env: dict[str, str]) -> None:
+    for prefix, (pool, endpoint_key, endpoint_kind) in API_ROLES.items():
+        if not env.get(f"{prefix}_API_KEY"):
+            key_file = env.get(f"{prefix}_KEY_FILE")
+            if key_file:
+                env[f"{prefix}_API_KEY"] = configure_key_file(pool, key_file)
+
+        base_url = _base_url(env, prefix)
+        if base_url:
+            env[endpoint_key] = _chat_url(base_url) if endpoint_kind == "chat" else base_url
+
 
 
 def _load_benchmarks(payload: dict[str, Any]) -> list[str]:
@@ -231,32 +275,16 @@ def _path_env(paths: RuntimePaths) -> dict[str, str]:
     }
 
 
-def _apply_api_defaults(api_key: str, openai_base_url: str, chat_url: str) -> None:
-    defaults = {
-        "REASONING_API_KEY": api_key,
-        "REASONING_END_POINT": chat_url,
-        "VERIFIER_API_KEY": api_key,
-        "VERIFIER_END_POINT": openai_base_url,
-        "EXPERIENCE_API_KEY": api_key,
-        "EXPERIENCE_END_POINT": chat_url,
-        "EXPERIENCE_EMBEDDING_API_KEY": api_key,
-        "EXPERIENCE_EMBEDDING_ENDPOINT": openai_base_url,
-    }
-    for key, value in defaults.items():
-        os.environ[key] = value
-
-
 def apply_runtime_env(runtime: RuntimeConfig) -> None:
     """Populate environment variables consumed by legacy runtime modules."""
     os.environ.update(_path_env(runtime.paths))
-    os.environ.update(runtime.compat_env)
+    env = dict(runtime.compat_env)
+    _apply_role_api_config(env)
+    os.environ.update(env)
 
     missing = [key for key in REQUIRED_ENV_KEYS if os.environ.get(key) in (None, "")]
     if missing:
         raise ValueError(f"Missing required runtime env values in {RUNTIME_CONFIG_PATH}: {', '.join(missing)}")
-
-    api_key, openai_base_url, chat_url = _openai_api_config()
-    _apply_api_defaults(api_key, openai_base_url, chat_url)
 
 
 def load_runtime_config() -> RuntimeConfig:

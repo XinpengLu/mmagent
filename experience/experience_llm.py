@@ -74,11 +74,10 @@ class ExperienceLLM:
     ) -> str:
         """Call the configured experience API with bounded retries."""
         max_retries = self.settings.max_retries
-        api_key = os.environ.get("OPENAI_API_KEY", "")
-        base_url = os.environ.get("OPENAI_BASE_URL", "").rstrip("/")
-        endpoint = f"{base_url}/chat/completions" if base_url else ""
+        api_key = os.environ.get("EXPERIENCE_API_KEY", "")
+        endpoint = os.environ.get("EXPERIENCE_END_POINT", "").rstrip("/")
         if not api_key or not endpoint:
-            raise ValueError("OPENAI_API_KEY and OPENAI_BASE_URL must be set")
+            raise ValueError("EXPERIENCE_API_KEY and EXPERIENCE_END_POINT must be set")
 
         return self._try_single_experience_api(
             api_key,
@@ -141,7 +140,7 @@ class ExperienceLLM:
                     last_error = self.response_error_message(api_name, resp, attempt, max_retries)
                     print(last_error)
                     if openai_should_rotate(resp.status_code, last_error):
-                        api_key = rotate_current_key("openai", api_key)
+                        api_key = rotate_current_key("experience", api_key)
                         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
                         continue
                     if resp.status_code in {400, 401, 403, 404}:

@@ -113,14 +113,18 @@ class ExperienceRetriever:
         self.embedding_api_key = (
             embedding_api_key 
             or os.environ.get("EXPERIENCE_EMBEDDING_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")
         )
         
         self.embedding_endpoint = (
             embedding_endpoint
             or os.environ.get("EXPERIENCE_EMBEDDING_ENDPOINT")
-            or os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1")
         )
+
+        if not self.embedding_endpoint:
+            raise ValueError(
+                "Embedding endpoint is required. Set EXPERIENCE_EMBEDDING_ENDPOINT "
+                "or pass embedding_endpoint parameter."
+            )
         
         if not self.embedding_endpoint.endswith("/v1"):
             self.embedding_endpoint = self.embedding_endpoint.rstrip("/") + "/v1"
@@ -128,7 +132,7 @@ class ExperienceRetriever:
         if not self.embedding_api_key:
             raise ValueError(
                 "Embedding API key is required. Set EXPERIENCE_EMBEDDING_API_KEY "
-                "or OPENAI_API_KEY environment variable, or pass embedding_api_key parameter."
+                "or pass embedding_api_key parameter."
             )
         
         self._experience_embeddings: Dict[str, np.ndarray] = {}

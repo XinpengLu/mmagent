@@ -114,8 +114,8 @@ def _cluster_tags_compatible(record_a: Dict[str, Any], record_b: Dict[str, Any])
 
 
 def _try_content_embeddings(records: List[Dict[str, Any]]) -> Optional[np.ndarray]:
-    api_key = os.environ.get("EXPERIENCE_EMBEDDING_API_KEY") or os.environ.get("OPENAI_API_KEY")
-    endpoint = os.environ.get("EXPERIENCE_EMBEDDING_ENDPOINT") or os.environ.get("OPENAI_API_BASE")
+    api_key = os.environ.get("EXPERIENCE_EMBEDDING_API_KEY")
+    endpoint = os.environ.get("EXPERIENCE_EMBEDDING_ENDPOINT")
     if not api_key or not endpoint:
         return None
     try:

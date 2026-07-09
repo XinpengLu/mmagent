@@ -1,4 +1,4 @@
-name: mmagent
+﻿name: mmagent
 mode: train_val
 
 benchmarks:
@@ -73,8 +73,15 @@ failure_recovery:
   success_candidates: 3
 
 api:
-  openai_key_file: configs/keys/openai.keys
-  openai_base_url: "https://api.llm.ustc.edu.cn/v1"
+  reasoning_key_file: configs/keys/openai.keys
+  reasoning_base_url: "https://api.llm.ustc.edu.cn/v1"
+  verifier_key_file: configs/keys/openai.keys
+  verifier_base_url: "https://api.llm.ustc.edu.cn/v1"
+  experience_key_file: configs/keys/openai.keys
+  experience_base_url: "https://api.llm.ustc.edu.cn/v1"
+  experience_embedding_key_file: configs/keys/openai.keys
+  experience_embedding_base_url: "https://api.llm.ustc.edu.cn/v1"
   serpapi_key_file: configs/keys/serp.keys
   jina_key_file: configs/keys/jina.keys
   jina_proxy: "http://127.0.0.1:7890"
+

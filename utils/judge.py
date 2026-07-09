@@ -117,7 +117,7 @@ class LLMJudgeClient:
         self.client = openai.OpenAI(base_url=self.endpoint, api_key=self.api_key)
 
     def _rotate_api_key(self) -> None:
-        self.api_key = rotate_current_key("openai", self.api_key)
+        self.api_key = rotate_current_key("verifier", self.api_key)
         self._build_client()
 
     def evaluate(

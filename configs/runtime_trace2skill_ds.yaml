@@ -1,7 +1,6 @@
-mode: train_test
+﻿mode: train_test
 
 benchmarks:
-  - VisualToolBench
   - MMSearch-Plus
 
 paths:
@@ -28,8 +27,8 @@ baseline:
   trace2skill_train_samples: 100
   trace2skill_lesson_max_tokens: 512
   trace2skill_patch_batch_size: 8
-  trace2skill_patch_max_tokens: 20000
-  trace2skill_merge_max_tokens: 20000
+  trace2skill_patch_max_tokens: 30000
+  trace2skill_merge_max_tokens: 30000
   reuse_train_benchmark_for_test_only:
     MMBrowseComp: BrowseComp-V3
     VisBrowse-Bench: BrowseComp-V3
@@ -42,10 +41,12 @@ rollout:
   max_tokens: 8192
 
 api:
-  openai_key_file: configs/keys/openai.keys
-  openai_base_url: "https://card.nassaapi.xyz/v1"
-  # openai_key_file: configs/keys/qwen_openai4.keys
-  # openai_base_url: "https://api.llm.ustc.edu.cn/v1"
+  reasoning_key_file: configs/keys/openai2.keys
+  reasoning_base_url: "https://card.nassaapi.xyz/v1"
+  verifier_key_file: configs/keys/openai2.keys
+  verifier_base_url: "https://card.nassaapi.xyz/v1"
+  # reasoning_key_file: configs/keys/qwen_openai4.keys
   serpapi_key_file: configs/keys/serp.keys
   jina_key_file: configs/keys/jina.keys
   jina_proxy: "http://127.0.0.1:7890"
+

@@ -316,8 +316,8 @@ def _build_embedding_retriever(
         return ExperienceRetriever(
             experiences=_retriever_records(skill_texts, prefiltered_skills),
             embedding_model=embedding_model or os.environ.get("EXPERIENCE_EMBEDDING_MODEL", "text-embedding-3-small"),
-            embedding_api_key=embedding_api_key or os.environ.get("EXPERIENCE_EMBEDDING_API_KEY") or os.environ.get("OPENAI_API_KEY"),
-            embedding_endpoint=embedding_endpoint or os.environ.get("EXPERIENCE_EMBEDDING_ENDPOINT") or os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1"),
+            embedding_api_key=embedding_api_key or os.environ.get("EXPERIENCE_EMBEDDING_API_KEY"),
+            embedding_endpoint=embedding_endpoint or os.environ.get("EXPERIENCE_EMBEDDING_ENDPOINT"),
             cache_dir=str(skill_root(skill_library_path)),
             enable_cache=enable_cache,
             experience_library_path=str(skill_index_path(skill_library_path)),
