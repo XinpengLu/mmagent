@@ -1,0 +1,10 @@
+extends: ../../runtime.yaml
+
+ablation:
+  kind: module
+  name: no_skill
+  modules:
+    skill_generation: false
+    skill_retrieval: false
+    linked_experience_injection: false
+

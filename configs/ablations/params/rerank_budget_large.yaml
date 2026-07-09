@@ -1,0 +1,10 @@
+extends: ../../runtime.yaml
+
+memory:
+  rerank_top_skills: 3
+  rerank_top_experiences: 12
+
+ablation:
+  kind: param
+  name: rerank_budget_large
+

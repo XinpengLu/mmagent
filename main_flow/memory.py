@@ -136,7 +136,9 @@ def _print_retriever_stats(args, retriever: ExperienceRetriever) -> None:
 
 def initialize_experience_retriever(args):
     """Initialize the experience retriever used by sample-level memory retrieval."""
-    if not args.experience_library and not args.skill_library:
+    if not getattr(args, "ablation_experience_retrieval", True):
+        return None, None
+    if not args.experience_library:
         return None, None
 
     try:
@@ -248,7 +250,7 @@ def _load_images_for_retrieval(sample, args) -> Optional[List[Any]]:
 
 def _retrieve_experiences(query: _MemoryQuery, args, experience_retriever, question_id: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Retrieve direct experience candidates for a sample."""
-    if experience_retriever is None:
+    if experience_retriever is None or not getattr(args, "ablation_experience_retrieval", True):
         return {}, {}
 
     top_k = args.experience_retrieval_top_k
@@ -268,6 +270,8 @@ def _retrieve_experiences(query: _MemoryQuery, args, experience_retriever, quest
 
 def _retrieve_skills(query: _MemoryQuery, args, experience_retriever, retrieval_info: Dict[str, Any], question_id: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Dict[str, Any]]:
     """Retrieve modular skill candidates and the experience library they link to."""
+    if not getattr(args, "ablation_skill_retrieval", True):
+        return [], {}, {}
     skill_index = load_skill_index(args.skill_library)
     modular_index_exists = os.path.exists(skill_index_path(args.skill_library))
     has_modular_skill_index = modular_index_exists or bool(skill_index.get("skills"))
@@ -306,6 +310,18 @@ def _candidate_experiences_for_rerank(state: _MemoryPipelineState) -> Dict[str, 
     for exp_id, record in linked_exps.items():
         candidate_exps.setdefault(exp_id, record)
     return candidate_exps
+
+
+def _select_without_llm_rerank(args, state: _MemoryPipelineState) -> None:
+    state.selected_skills = state.skill_candidates[:args.memory_rerank_top_skills]
+    if getattr(args, "ablation_linked_experience_injection", True):
+        linked_exps = collect_linked_experiences(state.selected_skills, state.all_experiences)
+        state.linked_experience_ids = list(linked_exps.keys())
+        for exp_id, record in linked_exps.items():
+            state.retrieved_exps.setdefault(exp_id, record)
+    state.retrieved_exps = dict(list((state.retrieved_exps or {}).items())[:args.memory_rerank_top_experiences])
+    state.memory_rerank_info = {"mode": "disabled_by_ablation"}
+    state.use_rewrite = False
 
 
 def _llm_client_for_memory(state: _MemoryPipelineState, experience_retriever) -> Any:
@@ -353,9 +369,17 @@ def _rerank_memory(query: _MemoryQuery, args, state: _MemoryPipelineState, exper
     """Use the LLM to select the final skills and direct/linked experiences."""
     if not state.skill_candidates:
         return
+    if not getattr(args, "ablation_memory_rerank", True):
+        _select_without_llm_rerank(args, state)
+        print(f"  [Memory Rerank] Disabled by ablation; selected {len(state.selected_skills)} skill candidate(s)")
+        return
 
     try:
-        candidate_exps = _candidate_experiences_for_rerank(state)
+        candidate_exps = (
+            _candidate_experiences_for_rerank(state)
+            if getattr(args, "ablation_linked_experience_injection", True)
+            else dict(state.retrieved_exps or {})
+        )
         state.selected_skills, state.retrieved_exps, state.memory_rerank_info = rerank_memory_with_llm(
             query_text=query.rerank_query_text,
             candidate_skills=state.skill_candidates,
@@ -368,23 +392,25 @@ def _rerank_memory(query: _MemoryQuery, args, state: _MemoryPipelineState, exper
             query_metadata_tags=query.metadata_tags,
         )
         selected_skill_ids = [skill["skill_id"] for skill in state.selected_skills]
-        state.linked_experience_ids = _selected_linked_experience_ids(
-            state.selected_skills,
-            state.all_experiences,
-            set((state.retrieved_exps or {}).keys()),
-        )
+        if getattr(args, "ablation_linked_experience_injection", True):
+            state.linked_experience_ids = _selected_linked_experience_ids(
+                state.selected_skills,
+                state.all_experiences,
+                set((state.retrieved_exps or {}).keys()),
+            )
         print(f"  [Memory Rerank] Selected {len(state.selected_skills)} skill(s) and {len(state.retrieved_exps)} experience(s)")
         if selected_skill_ids:
             print(f"  [Skill] Selected modular skill(s): {', '.join(selected_skill_ids)}")
     except Exception as e:
         print(f"  [Skill] Warning: failed to rerank skill-linked memories: {e}")
         state.selected_skills = state.skill_candidates[:args.memory_rerank_top_skills]
-        linked_exps = collect_linked_experiences(state.selected_skills, state.all_experiences)
-        state.linked_experience_ids = list(linked_exps.keys())
         state.retrieved_exps = dict(state.retrieved_exps or {})
-        for exp_id, record in linked_exps.items():
-            if exp_id not in state.retrieved_exps:
-                state.retrieved_exps[exp_id] = record
+        if getattr(args, "ablation_linked_experience_injection", True):
+            linked_exps = collect_linked_experiences(state.selected_skills, state.all_experiences)
+            state.linked_experience_ids = list(linked_exps.keys())
+            for exp_id, record in linked_exps.items():
+                if exp_id not in state.retrieved_exps:
+                    state.retrieved_exps[exp_id] = record
 
     # Modular skill path keeps structured experiences and skips rewrite/adaptation.
     state.use_rewrite = False
@@ -416,7 +442,7 @@ def _filter_and_rewrite_memory(query: _MemoryQuery, args, state: _MemoryPipeline
             + ", ".join(dropped_skill_ids)
         )
 
-    if state.retrieved_exps and state.use_rewrite:
+    if state.retrieved_exps and state.use_rewrite and getattr(args, "ablation_experience_rewrite", True):
         state.original_retrieved_exps = copy.deepcopy(state.retrieved_exps)
         state.llm_client = experience_retriever.llm_client or ExperienceLLM()
         print(f"  [Retrieval] Rewriting {len(state.retrieved_exps)} experiences...")
@@ -551,13 +577,19 @@ def _build_tool_plan(state: _MemoryPipelineState, question_id: str) -> Dict[str,
 def _build_injection(query: _MemoryQuery, args, state: _MemoryPipelineState, sample_dir: str, question_id: str) -> str:
     """Build the final prompt injection from tool plan, selected skills, and experiences."""
     skill_injection = ""
-    if state.selected_skills:
+    if state.selected_skills and getattr(args, "ablation_skill_retrieval", True):
         skill_injection = _process_skill(state.selected_skills, sample_dir, question_id)
 
-    plan_experiences = _build_tool_plan(state, question_id)
-    _apply_tool_plan_policy(args, state, plan_experiences)
+    plan_experiences = {}
+    if getattr(args, "ablation_tool_plan", True):
+        plan_experiences = _build_tool_plan(state, question_id)
+        _apply_tool_plan_policy(args, state, plan_experiences)
 
-    exp_injection = format_for_prompt(state.retrieved_exps, max_items=len(state.retrieved_exps)) if state.retrieved_exps else ""
+    exp_injection = (
+        format_for_prompt(state.retrieved_exps, max_items=len(state.retrieved_exps))
+        if state.retrieved_exps and getattr(args, "ablation_experience_injection", True)
+        else ""
+    )
     tool_plan_injection = (
         f"<mandatory_tool_plan>\n{state.mandatory_tool_plan}\n</mandatory_tool_plan>"
         if state.mandatory_tool_plan else ""
@@ -626,8 +658,8 @@ def retrieve_experiences_for_sample(sample, args, experience_retriever, base_sys
     Run sample-level memory retrieval and prompt injection.
     Pipeline: build query -> retrieve memories -> rerank -> filter -> inject.
     """
-    exp_enabled = experience_retriever is not None
-    skill_enabled = bool(args.skill_library)
+    exp_enabled = experience_retriever is not None and getattr(args, "ablation_experience_retrieval", True)
+    skill_enabled = bool(args.skill_library) and getattr(args, "ablation_skill_retrieval", True)
 
     if not (exp_enabled or skill_enabled):
         return _finalize_prompt(args, base_system_prompt, update_global_prompts)

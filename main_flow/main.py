@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import argparse
+
 from configs.runtime import load_runtime_config
 from .context import build_context
 from .phase import run_phase
@@ -23,7 +25,11 @@ def run_mode(runtime):
 
 
 def main() -> None:
-    runtime = load_runtime_config()
+    parser = argparse.ArgumentParser(description="Run MMAgent benchmark pipeline.")
+    parser.add_argument("--config", default=None, help="Runtime YAML path. Defaults to configs/runtime.yaml.")
+    args = parser.parse_args()
+
+    runtime = load_runtime_config(args.config)
     print(f"Mode: {runtime.mode}")
     print(f"Benchmarks: {', '.join(runtime.benchmarks)}")
     run_mode(runtime)

@@ -1,0 +1,17 @@
+extends: ../../runtime.yaml
+
+ablation:
+  kind: module
+  name: no_memory
+  modules:
+    experience_generation: false
+    experience_retrieval: false
+    experience_rewrite: false
+    experience_injection: false
+    skill_generation: false
+    skill_retrieval: false
+    linked_experience_injection: false
+    memory_rerank: false
+    tool_plan: false
+    failure_recovery: false
+

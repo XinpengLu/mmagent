@@ -1,0 +1,9 @@
+extends: ../../runtime.yaml
+
+experience:
+  max_items: 30
+
+ablation:
+  kind: param
+  name: experience_max_items_30
+

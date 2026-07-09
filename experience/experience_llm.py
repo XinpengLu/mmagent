@@ -1,4 +1,4 @@
-import os
+﻿import os
 import time
 import requests
 from typing import Optional, Dict, List, Union, Any
@@ -7,7 +7,7 @@ from PIL import Image
 from .config import ExperienceLLMSettings
 from .utils import image_to_base64
 from utils.api_usage_logger import log_api_usage
-from utils.key_pool import openai_should_rotate, rotate_current_key
+from utils.key_pool import llm_key_should_rotate, rotate_current_key
 
 
 def is_openai_reasoning_model(model_name: str) -> bool:
@@ -139,7 +139,7 @@ class ExperienceLLM:
                 else:
                     last_error = self.response_error_message(api_name, resp, attempt, max_retries)
                     print(last_error)
-                    if openai_should_rotate(resp.status_code, last_error):
+                    if llm_key_should_rotate(resp.status_code, last_error):
                         api_key = rotate_current_key("experience", api_key)
                         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
                         continue
@@ -219,3 +219,4 @@ class ExperienceLLM:
             timeout=self.settings.image_api_timeout,
             api_name="Multimodal Experience API",
         )
+

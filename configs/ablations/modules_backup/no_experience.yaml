@@ -1,0 +1,11 @@
+extends: ../../runtime.yaml
+
+ablation:
+  kind: module
+  name: no_experience
+  modules:
+    experience_generation: false
+    experience_retrieval: false
+    experience_rewrite: false
+    experience_injection: false
+    linked_experience_injection: false

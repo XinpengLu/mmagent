@@ -1,4 +1,4 @@
-﻿name: mmagent
+﻿name: hive
 mode: train_val
 
 benchmarks:
@@ -61,7 +61,7 @@ skill:
   cluster:
     max_clusters: 12
     min_experiences: 2
-    similarity_threshold: 0.74
+    similarity_threshold: 0.75
 
   retrieval:
     top_k: 3
@@ -72,6 +72,22 @@ failure_recovery:
   max_candidates: 1
   success_candidates: 3
 
+ablation:
+  kind: default
+  name: default
+  modules:
+    experience_generation: true
+    experience_retrieval: true
+    experience_rewrite: true
+    experience_injection: true
+    skill_generation: true
+    skill_retrieval: true
+    linked_experience_injection: true
+    memory_rerank: true
+    tool_plan: true
+    failure_recovery: true
+    validation_reflection: true
+
 api:
   reasoning_key_file: configs/keys/openai.keys
   reasoning_base_url: "https://api.llm.ustc.edu.cn/v1"
@@ -79,8 +95,8 @@ api:
   verifier_base_url: "https://api.llm.ustc.edu.cn/v1"
   experience_key_file: configs/keys/openai.keys
   experience_base_url: "https://api.llm.ustc.edu.cn/v1"
-  experience_embedding_key_file: configs/keys/openai.keys
-  experience_embedding_base_url: "https://api.llm.ustc.edu.cn/v1"
+  experience_embedding_key_file: configs/keys/huawei.keys
+  experience_embedding_base_url: "http://115.120.87.159:8082"
   serpapi_key_file: configs/keys/serp.keys
   jina_key_file: configs/keys/jina.keys
   jina_proxy: "http://127.0.0.1:7890"

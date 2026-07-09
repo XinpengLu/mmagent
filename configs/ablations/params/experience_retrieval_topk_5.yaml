@@ -1,0 +1,10 @@
+extends: ../../runtime.yaml
+
+experience:
+  retrieval:
+    top_k: 5
+
+ablation:
+  kind: param
+  name: experience_retrieval_topk_5
+

@@ -38,7 +38,7 @@ REQUIRED_ENV_KEYS = (
     "EXPERIENCE_MAX_ITEMS",
 )
 
-RESERVED_CONFIG_KEYS = {"name", "mode", "benchmarks", "paths"}
+RESERVED_CONFIG_KEYS = {"extends", "name", "mode", "benchmarks", "paths"}
 
 COMPAT_ENV_ALIASES = {
     "ROLLOUT_PER_SAMPLE": "ROLLOUTS_PER_SAMPLE",
@@ -149,17 +149,55 @@ def _reasoning_model_name(payload: dict[str, Any], source: Path) -> str:
 
 
 def _run_name(payload: dict[str, Any]) -> str:
-    return str(payload.get("name") or "mmagent")
+    base_name = str(payload.get("name") or "mmagent")
+    ablation = payload.get("ablation")
+    if not isinstance(ablation, dict):
+        return base_name
+    ablation_name = str(ablation.get("name") or "").strip()
+    if not ablation_name or ablation_name.lower() in {"none", "default"}:
+        return base_name
+    ablation_kind = str(ablation.get("kind") or "ablation").strip() or "ablation"
+    return f"{base_name}_ablation_{ablation_kind}_{ablation_name}"
 
 
-def _load_runtime_payload(config_path: Path) -> dict[str, Any]:
+def _deep_merge_config(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        if (
+            key in merged
+            and isinstance(merged[key], dict)
+            and isinstance(value, dict)
+        ):
+            merged[key] = _deep_merge_config(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _load_runtime_payload(config_path: Path, seen: set[Path] | None = None) -> dict[str, Any]:
+    config_path = config_path.resolve()
+    seen = seen or set()
+    if config_path in seen:
+        raise ValueError(f"Runtime config extends cycle detected: {config_path}")
+    seen.add(config_path)
+
     if not config_path.exists():
         raise FileNotFoundError(f"Missing runtime config: {config_path}")
 
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"Runtime config must be a YAML mapping: {config_path}")
-    return payload
+
+    parent = payload.get("extends")
+    if not parent:
+        return payload
+
+    parent_path = Path(str(parent))
+    if not parent_path.is_absolute():
+        parent_path = config_path.parent / parent_path
+    parent_payload = _load_runtime_payload(parent_path, seen)
+    child_payload = {key: value for key, value in payload.items() if key != "extends"}
+    return _deep_merge_config(parent_payload, child_payload)
 
 
 def _load_runtime_paths(root: Path, payload: dict[str, Any], source: Path) -> RuntimePaths:
@@ -275,7 +313,7 @@ def _path_env(paths: RuntimePaths) -> dict[str, str]:
     }
 
 
-def apply_runtime_env(runtime: RuntimeConfig) -> None:
+def apply_runtime_env(runtime: RuntimeConfig, source: Path = RUNTIME_CONFIG_PATH) -> None:
     """Populate environment variables consumed by legacy runtime modules."""
     os.environ.update(_path_env(runtime.paths))
     env = dict(runtime.compat_env)
@@ -284,13 +322,16 @@ def apply_runtime_env(runtime: RuntimeConfig) -> None:
 
     missing = [key for key in REQUIRED_ENV_KEYS if os.environ.get(key) in (None, "")]
     if missing:
-        raise ValueError(f"Missing required runtime env values in {RUNTIME_CONFIG_PATH}: {', '.join(missing)}")
+        raise ValueError(f"Missing required runtime env values in {source}: {', '.join(missing)}")
 
 
-def load_runtime_config() -> RuntimeConfig:
+def load_runtime_config(config_path: str | Path | None = None) -> RuntimeConfig:
     global _ACTIVE_RUNTIME_CONFIG
 
-    config_path = RUNTIME_CONFIG_PATH
+    config_path = Path(config_path) if config_path is not None else RUNTIME_CONFIG_PATH
+    if not config_path.is_absolute():
+        config_path = PROJECT_ROOT / config_path
+    config_path = config_path.resolve()
     payload = _load_runtime_payload(config_path)
     root = PROJECT_ROOT
     paths = _load_runtime_paths(root, payload, config_path)
@@ -304,6 +345,6 @@ def load_runtime_config() -> RuntimeConfig:
         settings=settings,
         compat_env=_flatten_compat_env(settings),
     )
-    apply_runtime_env(runtime)
+    apply_runtime_env(runtime, config_path)
     _ACTIVE_RUNTIME_CONFIG = runtime
     return runtime

@@ -1,0 +1,10 @@
+extends: ../../runtime.yaml
+
+skill:
+  cluster:
+    max_clusters: 18
+
+ablation:
+  kind: param
+  name: skill_clusters_18
+

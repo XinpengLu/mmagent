@@ -1,0 +1,9 @@
+extends: ../../runtime.yaml
+
+ablation:
+  kind: module
+  name: no_experience_retrieval
+  modules:
+    experience_retrieval: false
+    experience_rewrite: false
+

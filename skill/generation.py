@@ -1152,7 +1152,8 @@ def cluster_experiences_to_skills(
     normalized = normalize_experience_library(experiences)
     if not normalized or not skill_library_path:
         return normalized
-    normalized, _ = synthesize_recovery_experiences(normalized, llm=llm)
+    if bool(getattr(args, "ablation_failure_recovery", True)):
+        normalized, _ = synthesize_recovery_experiences(normalized, llm=llm)
     normalized = _cap_experience_count(normalized)
 
     skill_source_records = _skill_generation_sources(normalized)

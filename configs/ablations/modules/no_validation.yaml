@@ -1,0 +1,13 @@
+extends: ../../runtime.yaml
+
+mode: train_test
+
+validation:
+  reflection: false
+
+ablation:
+  kind: module
+  name: no_validation
+  modules:
+    validation_reflection: false
+

@@ -1,0 +1,11 @@
+extends: ../../runtime.yaml
+
+validation:
+  reflection: false
+
+ablation:
+  kind: module
+  name: no_validation_reflection
+  modules:
+    validation_reflection: false
+

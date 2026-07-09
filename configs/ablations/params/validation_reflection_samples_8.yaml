@@ -1,0 +1,9 @@
+extends: ../../runtime.yaml
+
+validation:
+  reflection_max_samples: 8
+
+ablation:
+  kind: param
+  name: validation_reflection_samples_8
+

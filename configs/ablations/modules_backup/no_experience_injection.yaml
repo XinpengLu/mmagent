@@ -1,0 +1,8 @@
+extends: ../../runtime.yaml
+
+ablation:
+  kind: module
+  name: no_experience_injection
+  modules:
+    experience_injection: false
+

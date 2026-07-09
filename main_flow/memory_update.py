@@ -14,6 +14,7 @@ from experience import (
     save_library as exp_save_library,
     refine_experience_library,
 )
+from main_flow.batching import experience_update_interval_samples
 from skill import cluster_experiences_to_skills
 
 
@@ -155,7 +156,7 @@ def _merge_experience_ops(all_experience_ops, args, is_final):
 
 
 def _maybe_cluster_skills(merged, args):
-    if not (merged is not None and args.skill_library):
+    if not (merged is not None and args.skill_library and getattr(args, "ablation_skill_generation", True)):
         return
     skill_start = time.time()
     merged = cluster_experiences_to_skills(merged, args.skill_library, ExperienceLLM(), args)
@@ -197,7 +198,10 @@ class TrainingMemoryUpdater:
         self.memory_runtime = memory_runtime
         self.queue = []
         self.batch_idx = 0
-        self.enabled = args.phase == "train"
+        self.enabled = args.phase == "train" and getattr(args, "ablation_experience_generation", True)
+        self.update_interval_samples = (
+            experience_update_interval_samples(args) if self.enabled else 1
+        )
 
     def extend(self, sample_infos):
         if not self.enabled or not sample_infos:
@@ -212,7 +216,7 @@ class TrainingMemoryUpdater:
         self.flush_if_ready()
 
     def flush_if_ready(self):
-        if len(self.queue) >= self.args.experience_samples_per_large_batch:
+        if len(self.queue) >= self.update_interval_samples:
             print(f"\n[Large Batch] Triggering experience generation for {len(self.queue)} samples...")
             self._process_queue(is_final=False)
 

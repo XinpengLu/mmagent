@@ -1,4 +1,4 @@
-"""OpenAI-compatible chat API caller used by the rollout engine."""
+﻿"""OpenAI-compatible chat API caller used by the rollout engine."""
 
 import os
 import time
@@ -6,7 +6,7 @@ import random
 import json
 import requests
 from utils.api_usage_logger import log_api_usage
-from utils.key_pool import openai_should_rotate, rotate_current_key
+from utils.key_pool import llm_key_should_rotate, rotate_current_key
 
 NON_RETRYABLE_STATUS_CODES = {400, 401, 403, 404}
 API_TIMEOUT_SECONDS = 240
@@ -324,7 +324,7 @@ def _try_single_api(api_key: str, end_point: str, model_name: str, messages: lis
             return None, last_error
 
         if response.status_code == 429:
-            if openai_should_rotate(response.status_code, _response_error_message(response)):
+            if llm_key_should_rotate(response.status_code, _response_error_message(response)):
                 api_key = rotate_current_key("reasoning", api_key)
                 continue
             should_retry, last_error = _retry_after_rate_limit(api_name, attempt, max_retries)
@@ -336,7 +336,7 @@ def _try_single_api(api_key: str, end_point: str, model_name: str, messages: lis
         if result is not None:
             return result, None
 
-        if error_type == "http_error" and openai_should_rotate(response.status_code, _response_error_message(response)):
+        if error_type == "http_error" and llm_key_should_rotate(response.status_code, _response_error_message(response)):
             api_key = rotate_current_key("reasoning", api_key)
             continue
 
@@ -387,3 +387,4 @@ def call_vision_api(model_name: str, messages: list, sampling_params: dict, max_
     max_retries = _max_retry_count(max_retries)
     config = _reasoning_api_config()
     return _call_reasoning_api(config, model_name, messages, sampling_params, max_retries, tools)
+

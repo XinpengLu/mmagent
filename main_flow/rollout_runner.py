@@ -409,7 +409,7 @@ def _schedule_initial_pipeline_work(
     sampling_params,
     run_single_rollout_func,
 ):
-    skill_enabled = bool(args.skill_library)
+    skill_enabled = bool(args.skill_library) and getattr(args, "ablation_skill_retrieval", True)
     if experience_retriever is None and not skill_enabled:
         for item in pending_samples:
             _schedule_item_rollouts(
@@ -815,7 +815,7 @@ class RolloutRunner:
     def _run_parallel_single_rollout(self):
         print(f"\n[Parallel Mode] Processing {len(self.data)} samples with {self.args.num_workers} workers...")
         if self.training_updater.enabled:
-            batch_size = min(self.args.experience_samples_per_large_batch, self.args.num_workers)
+            batch_size = min(self.training_updater.update_interval_samples, self.args.num_workers)
             sample_idx = 0
             while sample_idx < len(self.data):
                 actual_batch_size = min(batch_size, len(self.data) - sample_idx)

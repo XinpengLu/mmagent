@@ -23,6 +23,15 @@ def _validation_setting(ctx: MainFlowContext, key: str, default):
     return section.get(key, default) if isinstance(section, dict) else default
 
 
+def _ctx_setting(ctx: MainFlowContext, path: str, default):
+    current: Any = ctx.settings if isinstance(ctx.settings, dict) else {}
+    for key in path.split("."):
+        if not isinstance(current, dict) or key not in current:
+            return default
+        current = current[key]
+    return current
+
+
 def _rollout_setting(ctx: MainFlowContext, key: str, default):
     section = ctx.settings.get("rollout", {}) if isinstance(ctx.settings, dict) else {}
     return section.get(key, default) if isinstance(section, dict) else default
@@ -224,6 +233,8 @@ def _run_validation_reflection(
     stage_index: int,
     val_k: int,
 ) -> None:
+    if not bool(_ctx_setting(ctx, "ablation.modules.validation_reflection", True)):
+        return
     if not bool(_validation_setting(ctx, "reflection", False)):
         return
     reflection_json = val_stage_dir / "reflection.json"

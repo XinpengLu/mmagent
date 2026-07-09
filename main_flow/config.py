@@ -3,6 +3,7 @@ import os
 import yaml
 
 from engine.api_processors import set_global_prompts as set_processors_prompts
+from main_flow.batching import experience_update_interval_samples
 
 
 DEFAULT_TEMPERATURE = 0.6
@@ -18,7 +19,7 @@ class ExperimentConfig:
 
     def load(self):
         self._load_model_config()
-        self._configure_experience_batching()
+        self._validate_experience_batching()
         self._load_prompts()
         self._load_tool_configs()
         self._load_data()
@@ -28,19 +29,10 @@ class ExperimentConfig:
     def _load_model_config(self):
         self.args.model_name = os.environ.get("REASONING_MODEL_NAME")
 
-    def _configure_experience_batching(self):
+    def _validate_experience_batching(self):
         if self.args.phase != "train":
             return
-        
-        small_batch = self.args.rollouts_per_sample
-        large_batch = self.args.experience_large_batch
-
-        if large_batch % small_batch != 0:
-            raise ValueError(
-                f"experience_large_batch ({large_batch}) must be a multiple of "
-                f"rollouts_per_sample ({small_batch})"
-            )
-        self.args.experience_samples_per_large_batch = large_batch // small_batch
+        experience_update_interval_samples(self.args)
 
     def _load_prompts(self):
         with open(self.args.system_prompts_path, "r", encoding="utf-8") as f:

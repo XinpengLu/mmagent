@@ -1,4 +1,4 @@
-"""
+﻿"""
 LLM-as-Judge evaluator for assessing answer correctness.
 
 This module provides an LLM-based evaluation system that compares predicted
@@ -13,7 +13,7 @@ from typing import Tuple, List, Optional, Dict
 
 from prompts.judge_templates import SYSTEM_PROMPT, QUERY_PROMPT
 from utils.api_usage_logger import log_api_usage
-from utils.key_pool import openai_should_rotate, rotate_current_key
+from utils.key_pool import llm_key_should_rotate, rotate_current_key
 
 
 # Global client instance (lazily initialized)
@@ -173,7 +173,7 @@ class LLMJudgeClient:
                     attempt=attempt + 1,
                 )
                 print(f"[RateLimitError] Attempt {attempt + 1}/{max_retries}: {error_text}")
-                if openai_should_rotate(getattr(e, "status_code", None), error_text):
+                if llm_key_should_rotate(getattr(e, "status_code", None), error_text):
                     self._rotate_api_key()
                     continue
                 time.sleep(min(3 * (attempt + 1), 10))
@@ -191,7 +191,7 @@ class LLMJudgeClient:
                 )
                 error_code = getattr(e, 'status_code', None) or getattr(e, 'code', None)
                 print(f"[APIError] Attempt {attempt + 1}/{max_retries}: {str(e)} (code: {error_code})")
-                if openai_should_rotate(error_code, str(e)):
+                if llm_key_should_rotate(error_code, str(e)):
                     self._rotate_api_key()
                     continue
                 if error_code in {401, 403}:
@@ -403,3 +403,4 @@ def compute_score(
     except Exception as e:
         print(f"[compute_score] Error: {e}")
         return 0.0, f"Evaluation error: {str(e)}"
+

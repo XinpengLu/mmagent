@@ -32,6 +32,15 @@ def _setting_float(settings: dict, path: str) -> float:
     return float(_setting(settings, path))
 
 
+def _setting_bool(settings: dict, path: str, default: bool = True) -> bool:
+    current = settings
+    for key in path.split("."):
+        if not isinstance(current, dict) or key not in current:
+            return default
+        current = current[key]
+    return bool(current)
+
+
 @dataclass(frozen=True)
 class _PhasePaths:
     data_path: Path
@@ -66,6 +75,16 @@ class _ExecutionSettings:
     memory_rerank_top_experiences: int
     experience_retrieval_top_k: int
     experience_retrieval_min_similarity: float
+    ablation_experience_generation: bool
+    ablation_experience_retrieval: bool
+    ablation_experience_rewrite: bool
+    ablation_experience_injection: bool
+    ablation_skill_generation: bool
+    ablation_skill_retrieval: bool
+    ablation_linked_experience_injection: bool
+    ablation_memory_rerank: bool
+    ablation_tool_plan: bool
+    ablation_failure_recovery: bool
 
     @classmethod
     def from_context(cls, ctx: MainFlowContext) -> "_ExecutionSettings":
@@ -88,6 +107,16 @@ class _ExecutionSettings:
             memory_rerank_top_experiences=_setting_int(settings, "memory.rerank_top_experiences"),
             experience_retrieval_top_k=_setting_int(settings, "experience.retrieval.top_k"),
             experience_retrieval_min_similarity=_setting_float(settings, "experience.retrieval.min_similarity"),
+            ablation_experience_generation=_setting_bool(settings, "ablation.modules.experience_generation", True),
+            ablation_experience_retrieval=_setting_bool(settings, "ablation.modules.experience_retrieval", True),
+            ablation_experience_rewrite=_setting_bool(settings, "ablation.modules.experience_rewrite", True),
+            ablation_experience_injection=_setting_bool(settings, "ablation.modules.experience_injection", True),
+            ablation_skill_generation=_setting_bool(settings, "ablation.modules.skill_generation", True),
+            ablation_skill_retrieval=_setting_bool(settings, "ablation.modules.skill_retrieval", True),
+            ablation_linked_experience_injection=_setting_bool(settings, "ablation.modules.linked_experience_injection", True),
+            ablation_memory_rerank=_setting_bool(settings, "ablation.modules.memory_rerank", True),
+            ablation_tool_plan=_setting_bool(settings, "ablation.modules.tool_plan", True),
+            ablation_failure_recovery=_setting_bool(settings, "ablation.modules.failure_recovery", True),
         )
 
 

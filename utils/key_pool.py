@@ -29,7 +29,7 @@ KEY_FILE_ENV = {
     "jina": "JINA_KEY_FILE",
 }
 
-OPENAI_ROTATE_MARKERS = (
+LLM_KEY_ROTATE_MARKERS = (
     "每小时请求数已达上限",
     "当前请求过于频繁",
     "自动恢复",
@@ -204,9 +204,9 @@ def retire_current_key(pool: str, exhausted_key: str | None = None) -> str:
     return next_key
 
 
-def openai_should_rotate(status_code: int | None, message: str) -> bool:
+def llm_key_should_rotate(status_code: int | None, message: str) -> bool:
     text = f"{status_code or ''} {message or ''}".lower()
-    return any(marker.lower() in text for marker in OPENAI_ROTATE_MARKERS)
+    return any(marker.lower() in text for marker in LLM_KEY_ROTATE_MARKERS)
 
 
 def serp_should_rotate(status_code: int | None, message: str) -> bool:
