@@ -318,6 +318,7 @@ def _finalize_validation_run(
     write_validation_report(
         run_root=paths.benchmark_output_root,
         output_dir=paths.analysis_output_root,
+        generate_figures=False,
     )
     if bool(_validation_setting(ctx, "final_select_best", False)):
         _copy_memory_snapshot(paths.train_memory_root, paths.snapshot_root / "final_train_memory")

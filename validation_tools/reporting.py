@@ -1,7 +1,8 @@
-"""Structured validation metrics and publication-style plots."""
+"""Structured validation metrics and optional publication-style plots."""
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import re
@@ -207,17 +208,18 @@ def write_validation_report(
     *,
     run_root: Path,
     output_dir: Path | None = None,
+    generate_figures: bool = False,
 ) -> None:
     out_dir = output_dir or (run_root / "analysis")
     rows = _collect_stage_metrics(run_root)
     metrics_dir = out_dir / "metrics"
     figures_dir = out_dir / "figures"
     metrics_dir.mkdir(parents=True, exist_ok=True)
-    figures_dir.mkdir(parents=True, exist_ok=True)
 
     write_json(metrics_dir / "stage_metrics.json", {"stages": rows}, indent=2)
     _write_csv(metrics_dir / "stage_metrics.csv", rows)
-    if rows:
+    if rows and generate_figures:
+        figures_dir.mkdir(parents=True, exist_ok=True)
         build_all_plots(figures_dir, rows, run_root)
 
     best = max(
@@ -225,4 +227,23 @@ def write_validation_report(
         key=lambda row: (float(row.get("average_at_k") or 0.0), float(row.get("pass_at_k") or 0.0)),
         default={},
     )
-    print(json.dumps({"output_dir": str(out_dir), "metrics_dir": str(metrics_dir), "figures_dir": str(figures_dir), "best": best}, ensure_ascii=False, indent=2))
+    print(json.dumps({
+        "output_dir": str(out_dir),
+        "metrics_dir": str(metrics_dir),
+        "figures_dir": str(figures_dir) if generate_figures else None,
+        "figures_generated": bool(rows and generate_figures),
+        "best": best,
+    }, ensure_ascii=False, indent=2))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Generate validation analysis metrics and optional figures.")
+    parser.add_argument("--run-root", type=Path, required=True, help="Benchmark output root, e.g. output/gpt-5.5/hive/TIR-Bench/output")
+    parser.add_argument("--output-dir", type=Path, default=None, help="Analysis output directory. Defaults to <run-root>/analysis.")
+    parser.add_argument("--figures", action="store_true", help="Generate PDF figures under analysis/figures.")
+    args = parser.parse_args()
+    write_validation_report(run_root=args.run_root, output_dir=args.output_dir, generate_figures=args.figures)
+
+
+if __name__ == "__main__":
+    main()

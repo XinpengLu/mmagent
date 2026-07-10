@@ -50,6 +50,25 @@ def _default_prompt_and_tools(benchmark: str) -> tuple[str, str]:
     return BENCHMARK_PROMPT_TOOLS.get(benchmark, DEFAULT_PROMPT_TOOLS)
 
 
+def reuse_train_map(settings: dict[str, Any]) -> dict[str, str]:
+    mapping = settings.get("memory", {}).get("reuse_train_benchmark_for_test_only")
+    if mapping is None:
+        mapping = settings.get("baseline", {}).get("reuse_train_benchmark_for_test_only", {})
+    mapping = mapping or {}
+    if not isinstance(mapping, dict):
+        raise ValueError("memory.reuse_train_benchmark_for_test_only must be a mapping.")
+    return {str(target): str(source) for target, source in mapping.items() if source}
+
+
+def validate_reuse_train_order(benchmarks: list[str], settings: dict[str, Any]) -> None:
+    benchmark_order = {benchmark: idx for idx, benchmark in enumerate(benchmarks)}
+    for target, source in reuse_train_map(settings).items():
+        if target in benchmark_order and source in benchmark_order and benchmark_order[source] > benchmark_order[target]:
+            raise ValueError(
+                f"{target} reuses {source} train artifacts, so {source} must appear before {target} in benchmarks."
+            )
+
+
 def build_context(runtime: "RuntimeConfig") -> MainFlowContext:
     paths = runtime.paths
     return MainFlowContext(

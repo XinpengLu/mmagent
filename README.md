@@ -150,9 +150,17 @@ Without `RUN_ID`, the script uses the default `OUTPUT_ROOT`, which defaults to:
 F:\XSkill\mmagent\output\full_benchmark
 ```
 
-## Regenerate Analysis Figures
+## Generate Analysis Figures
 
-Validation analysis metrics and PDF figures are generated automatically at the end of `train_val`.
+Validation analysis metrics are generated automatically at the end of `train_val`
+and `train_val_test`. PDF figures are not generated during the run; generate
+them manually after all runs finish:
+
+```bash
+python -m validation_tools.reporting \
+  --run-root output/gpt-5.5/hive/TIR-Bench/output \
+  --figures
+```
 
 The plotting code lives under:
 

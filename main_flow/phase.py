@@ -168,12 +168,26 @@ def _count_samples_for_phase(phase: str, data_path: Path, phase_env: dict[str, s
 
 def _resolve_memory_paths(benchmark: str, ctx: MainFlowContext, phase_env: dict[str, str]) -> _MemoryPaths:
     memory_root = Path(phase_env.get("MEMORY_ROOT_OVERRIDE") or ctx.memory_root_base / benchmark / "memory")
+    memory_name = phase_env.get("MEMORY_NAME_OVERRIDE") or benchmark
     return _MemoryPaths(
-        memory_name=benchmark,
+        memory_name=memory_name,
         memory_root=memory_root,
         experience_library=memory_root / "experiences.json",
         skill_library=memory_root / "skill_library.anchor",
     )
+
+
+def _ensure_reusable_memory(benchmark: str, memory: _MemoryPaths, phase_env: dict[str, str]) -> None:
+    reuse_source = phase_env.get("REUSE_TRAIN_BENCHMARK", "")
+    if not reuse_source:
+        return
+    has_experiences = memory.experience_library.exists()
+    has_skills = (memory.memory_root / "skill_index.json").exists()
+    if not (has_experiences or has_skills):
+        raise SystemExit(
+            f"Error: {benchmark} is configured to reuse {reuse_source} memory, but no reusable memory exists at "
+            f"{memory.memory_root}. Run {reuse_source} training before testing {benchmark}."
+        )
 
 
 def _resolve_phase_paths(
@@ -212,6 +226,7 @@ def write_phase_summary(output_dir: Path, k: int) -> None:
 
 def _build_execution_args(
     *,
+    benchmark: str,
     phase: str,
     data_path: Path,
     image_dir: Path,
@@ -222,9 +237,11 @@ def _build_execution_args(
     enabled_tools: str,
     skill_library: Path,
     experience_library: Path,
+    reuse_train_benchmark: str = "",
 ) -> SimpleNamespace:
     return SimpleNamespace(
         phase=phase,
+        benchmark=benchmark,
         input_file=str(data_path),
         image_folder=str(image_dir),
         output_dir=str(output_dir),
@@ -234,6 +251,8 @@ def _build_execution_args(
         enabled_tools=enabled_tools,
         experience_library=str(experience_library),
         skill_library=str(skill_library),
+        reuse_train_benchmark=reuse_train_benchmark,
+        train_source_benchmark=reuse_train_benchmark or benchmark,
     )
 
 
@@ -249,6 +268,7 @@ def _build_phase_env(
         "MEMORY_ROOT": str(memory.memory_root),
         "EXPERIENCE_LIBRARY": str(memory.experience_library),
         "SKILL_LIBRARY": str(memory.skill_library),
+        "REUSE_TRAIN_BENCHMARK": phase_env.get("REUSE_TRAIN_BENCHMARK", ""),
         "MMAGENT_TRAIN_PHASE": str(phase == "train").lower(),
         "MMAGENT_VALIDATION_PHASE": str(phase == "val").lower(),
     }
@@ -288,6 +308,7 @@ def run_phase(
     max_samples = _count_samples_for_phase(phase, paths.data_path, phase_env)
     settings = _ExecutionSettings.from_context(ctx)
     paths.output_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_reusable_memory(benchmark, memory, phase_env)
     memory.memory_root.mkdir(parents=True, exist_ok=True)
 
     env = _build_phase_env(
@@ -298,6 +319,7 @@ def run_phase(
 
     args = _build_execution_args(
         phase=phase,
+        benchmark=benchmark,
         data_path=paths.data_path,
         image_dir=paths.image_dir,
         output_dir=paths.output_dir,
@@ -307,6 +329,7 @@ def run_phase(
         enabled_tools=enabled_tools,
         skill_library=memory.skill_library,
         experience_library=memory.experience_library,
+        reuse_train_benchmark=phase_env.get("REUSE_TRAIN_BENCHMARK", ""),
     )
     with _patched_environ(env), _tee_output(paths.log_file):
         run_main_flow_execution(args)

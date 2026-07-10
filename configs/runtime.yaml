@@ -1,8 +1,15 @@
 ﻿name: hive
-mode: train_val
+mode: train_val_test
 
 benchmarks:
   - TIR-Bench
+  - VisualToolBench
+  - MMSearch-Plus
+  - BrowseComp-V3
+  - AgentVista
+  - MMBrowseComp
+  - VisBrowse-Bench
+  - Agentic-MME
 
 paths:
   benchmark_processed: benchmark/processed
@@ -12,8 +19,8 @@ paths:
 
 models:
   reasoning_model_name: gpt-5.5
-  verifier_model_name: gpt-4o
-  experience_model_name: gpt-5.5
+  verifier_model_name: qwen3.6-chat
+  experience_model_name: qwen3.6-reasoner
   experience_embedding_model: text-embedding-3-small
 
 runtime:
@@ -54,6 +61,9 @@ experience:
     max_overflow: 12
 
 memory:
+  reuse_train_benchmark_for_test_only:
+    MMBrowseComp: BrowseComp-V3
+    VisBrowse-Bench: BrowseComp-V3
   rerank_top_skills: 2
   rerank_top_experiences: 8
 
@@ -89,14 +99,14 @@ ablation:
     validation_reflection: true
 
 api:
-  reasoning_key_file: configs/keys/openai.keys
-  reasoning_base_url: "https://api.llm.ustc.edu.cn/v1"
-  verifier_key_file: configs/keys/openai.keys
+  reasoning_key_file: configs/keys/huawei.keys
+  reasoning_base_url: "http://115.120.87.159:8082/v1"
+  verifier_key_file: configs/keys/qwen_openai.keys
   verifier_base_url: "https://api.llm.ustc.edu.cn/v1"
-  experience_key_file: configs/keys/openai.keys
+  experience_key_file: configs/keys/qwen_openai.keys
   experience_base_url: "https://api.llm.ustc.edu.cn/v1"
   experience_embedding_key_file: configs/keys/huawei.keys
-  experience_embedding_base_url: "http://115.120.87.159:8082"
+  experience_embedding_base_url: "http://115.120.87.159:8082/v1"
   serpapi_key_file: configs/keys/serp.keys
   jina_key_file: configs/keys/jina.keys
   jina_proxy: "http://127.0.0.1:7890"

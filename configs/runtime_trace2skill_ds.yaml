@@ -10,10 +10,10 @@ paths:
   tool_config: configs/tool_configs.yaml
 
 models:
-  reasoning_model_name: deepseek-v4-flash
-  verifier_model_name: deepseek-v4-flash
-  # reasoning_model_name: deepseek-v4-flash-ascend
-  # verifier_model_name: deepseek-v4-flash-ascend
+  # reasoning_model_name: deepseek-v4-flash
+  # verifier_model_name: deepseek-v4-flash
+  reasoning_model_name: deepseek-v4-flash-ascend
+  verifier_model_name: deepseek-v4-flash-ascend
 
 baseline:
   name: trace2skill
@@ -34,17 +34,17 @@ baseline:
     VisBrowse-Bench: BrowseComp-V3
 
 runtime:
-  num_workers: 12
+  num_workers: 4
 
 rollout:
   per_sample: 4
   max_tokens: 8192
 
 api:
-  reasoning_key_file: configs/keys/openai2.keys
-  reasoning_base_url: "https://card.nassaapi.xyz/v1"
-  verifier_key_file: configs/keys/openai2.keys
-  verifier_base_url: "https://card.nassaapi.xyz/v1"
+  reasoning_key_file: configs/keys/qwen_openai4.keys
+  reasoning_base_url: "https://api.llm.ustc.edu.cn/v1"
+  verifier_key_file: configs/keys/qwen_openai4.keys
+  verifier_base_url: "https://api.llm.ustc.edu.cn/v1"
   # reasoning_key_file: configs/keys/qwen_openai4.keys
   serpapi_key_file: configs/keys/serp.keys
   jina_key_file: configs/keys/jina.keys
