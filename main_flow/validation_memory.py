@@ -11,7 +11,7 @@ from typing import Any, Dict
 from validation_tools.history import read_history
 from validation_tools.metrics import sample_metric
 from utils.artifacts import MEMORY_USAGE_FILENAME
-from utils.artifacts import read_json, write_json
+from utils.artifacts import copy_tree_contents, read_json, write_json
 
 
 _VALIDATION_STAT_KEYS = {
@@ -73,7 +73,7 @@ def select_best(
     if out.exists():
         shutil.rmtree(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(snapshot, out)
+    copy_tree_contents(snapshot, out)
     _fix_skill_paths_in_memory(out)
 
     result = {

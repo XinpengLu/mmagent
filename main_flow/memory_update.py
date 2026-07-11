@@ -20,7 +20,12 @@ from experience import (
 )
 from main_flow.batching import experience_update_interval_samples
 from skill import cluster_experiences_to_skills, skill_generation_is_current
-from utils.artifacts import ROLLOUT_METRICS_FILENAME, TRAJECTORY_FILENAME
+from utils.artifacts import (
+    ROLLOUT_METRICS_FILENAME,
+    TRAJECTORY_FILENAME,
+    copy_file_contents,
+    copy_tree_contents,
+)
 
 
 EXPERIENCE_GENERATION_MARKER = ".experience_generation_complete.json"
@@ -223,6 +228,8 @@ def _next_snapshot_batch_idx(args):
     snapshot_root = Path(args.output_dir) / "snapshots"
     indices = []
     for path in snapshot_root.glob("batch_*") if snapshot_root.exists() else []:
+        if not (path / "metadata.json").exists():
+            continue
         suffix = path.name.removeprefix("batch_")
         if suffix.isdigit():
             indices.append(int(suffix))
@@ -243,20 +250,16 @@ def _experience_count(path):
 
 
 def _snapshot_experience_library(args, snapshot_dir):
-    import shutil
-
     snapshot_exp_path = os.path.join(snapshot_dir, "experiences.json")
     if args.experience_library and os.path.exists(args.experience_library):
-        shutil.copy2(args.experience_library, snapshot_exp_path)
+        copy_file_contents(args.experience_library, snapshot_exp_path)
     return _experience_count(snapshot_exp_path)
 
 
 def _snapshot_skill_memory(args, snapshot_dir):
-    import shutil
-
     metadata = {"skill_word_count": 0, "skill_count": 0}
     if args.skill_library and os.path.exists(args.skill_library):
-        shutil.copy2(args.skill_library, os.path.join(snapshot_dir, os.path.basename(args.skill_library)))
+        copy_file_contents(args.skill_library, os.path.join(snapshot_dir, os.path.basename(args.skill_library)))
         with open(args.skill_library, 'r', encoding='utf-8') as f:
             metadata["skill_word_count"] = len(f.read().split())
 
@@ -267,14 +270,18 @@ def _snapshot_skill_memory(args, snapshot_dir):
     skill_index_src = os.path.join(skill_root, "skill_index.json")
     if os.path.exists(skill_index_src):
         skill_index_dst = os.path.join(snapshot_dir, "skill_index.json")
-        shutil.copy2(skill_index_src, skill_index_dst)
+        copy_file_contents(skill_index_src, skill_index_dst)
         with open(skill_index_dst, 'r', encoding='utf-8') as f:
             skill_index = json.load(f)
         metadata["skill_count"] = len(skill_index.get("skills", {}))
 
     skills_src = os.path.join(skill_root, "skills")
     if os.path.isdir(skills_src):
-        shutil.copytree(skills_src, os.path.join(snapshot_dir, "skills"), dirs_exist_ok=True)
+        copy_tree_contents(
+            skills_src,
+            os.path.join(snapshot_dir, "skills"),
+            dirs_exist_ok=True,
+        )
     return metadata
 
 

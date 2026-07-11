@@ -15,7 +15,7 @@ from .validation_memory import apply_validation_feedback, calibrate_validation_s
 from .validation_reflection import reflect_validation_failures
 from validation_tools.history import record_validation_stage
 from validation_tools.reporting import write_validation_report
-from utils.artifacts import DATASET_SUMMARY_FILENAME
+from utils.artifacts import DATASET_SUMMARY_FILENAME, copy_file_contents, copy_tree_contents
 
 
 def _validation_setting(ctx: MainFlowContext, key: str, default):
@@ -57,7 +57,7 @@ def _copy_memory_snapshot(source_root: Path, target_root: Path) -> None:
         shutil.rmtree(target_root)
     target_root.parent.mkdir(parents=True, exist_ok=True)
     if source_root.exists():
-        shutil.copytree(source_root, target_root)
+        copy_tree_contents(source_root, target_root)
     else:
         target_root.mkdir(parents=True, exist_ok=True)
 
@@ -150,7 +150,7 @@ def _prepare_validation_dirs(paths: _ValidationPaths, resume_stage: int) -> None
 def _copy_train_stage_metrics(paths: _ValidationPaths, stage_index: int) -> None:
     train_metrics_file = paths.train_output_root / DATASET_SUMMARY_FILENAME
     if train_metrics_file.exists():
-        shutil.copy2(
+        copy_file_contents(
             train_metrics_file,
             paths.train_stage_root / f"train_stage_{stage_index}_metrics_at_k.json",
         )

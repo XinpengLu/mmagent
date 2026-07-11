@@ -128,7 +128,7 @@ ablation:
 api:
   reasoning_key_file: configs/keys/qwen_openai.keys
   reasoning_base_url: "https://api.llm.ustc.edu.cn/v1"
-  verifier_key_file: configs/keys/qwen_openai2.keys
+  verifier_key_file: configs/keys/qwen_openai4.keys
   verifier_base_url: "https://api.llm.ustc.edu.cn/v1"
   experience_key_file: configs/keys/qwen_openai4.keys
   experience_base_url: "https://api.llm.ustc.edu.cn/v1"

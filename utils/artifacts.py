@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -14,6 +15,34 @@ DATASET_SUMMARY_FILENAME = "metrics_at_k.json"
 AVERAGE_PASS_FILENAME = "average_pass_at_k.json"
 MEMORY_USAGE_FILENAME = "tt_memory_usage.json"
 RETRIEVAL_INFO_FILENAME = "tt_decomposition_info.txt"
+
+
+def copy_file_contents(source: str | Path, target: str | Path) -> None:
+    """Copy file bytes without permissions, timestamps, ownership, or xattrs."""
+    source_path = Path(source)
+    target_path = Path(target)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source_path, target_path)
+
+
+def copy_tree_contents(
+    source: str | Path,
+    target: str | Path,
+    *,
+    dirs_exist_ok: bool = False,
+) -> None:
+    """Recursively copy directory contents without filesystem metadata."""
+    source_path = Path(source)
+    target_path = Path(target)
+    if target_path.exists() and not dirs_exist_ok:
+        raise FileExistsError(f"Destination already exists: {target_path}")
+    target_path.mkdir(parents=True, exist_ok=True)
+    for item in source_path.rglob("*"):
+        destination = target_path / item.relative_to(source_path)
+        if item.is_dir():
+            destination.mkdir(parents=True, exist_ok=True)
+        elif item.is_file():
+            copy_file_contents(item, destination)
 
 
 def read_json(path: str | Path) -> Any:
