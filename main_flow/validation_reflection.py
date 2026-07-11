@@ -301,8 +301,14 @@ def _write_reflection_memory(
         skill_cluster_max_clusters=int(runtime_setting("skill.cluster.max_clusters", 12)),
         skill_max_length=1000,
     )
-    merged = cluster_experiences_to_skills(merged, str(skill_library), ExperienceLLM(), skill_args)
-    save_library(str(exp_path), merged)
+    try:
+        merged = cluster_experiences_to_skills(merged, str(skill_library), ExperienceLLM(), skill_args)
+        save_library(str(exp_path), merged)
+    except Exception as exc:
+        print(
+            "  [Skill Checkpoint] Warning: validation reflection experiences were saved, "
+            f"but skill update failed and will be reconciled by the next phase: {exc}"
+        )
 
 
 def reflect_validation_failures(

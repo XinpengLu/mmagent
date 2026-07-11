@@ -24,19 +24,23 @@ baseline:
   enable_function_calling: true
   expel_train_samples: 100
   expel_max_rules: 20
-  expel_rule_max_tokens: 4096
+  expel_train_rollouts_per_sample: 1
+  expel_rule_max_tokens: 1024
+  expel_rule_max_retries: 1
   reuse_train_benchmark_for_test_only:
     MMBrowseComp: BrowseComp-V3
     VisBrowse-Bench: BrowseComp-V3
 
 runtime:
-  num_workers: 8
+  num_workers: 4
 
 rollout:
   per_sample: 4
   max_tokens: 8192
 
 api:
+  api_timeout_seconds: 180
+  api_max_retries: 2
   reasoning_key_file: configs/keys/qwen_openai3.keys
   reasoning_base_url: "https://api.llm.ustc.edu.cn/v1"
   verifier_key_file: configs/keys/qwen_openai3.keys

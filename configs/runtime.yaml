@@ -21,6 +21,8 @@ models:
   reasoning_model_name: gpt-5.5
   verifier_model_name: qwen3.6-chat
   experience_model_name: qwen3.6-reasoner
+  experience_image_model_name: qwen3.6-chat
+  experience_critique_model_name: qwen3.6-chat
   experience_embedding_model: text-embedding-3-small
 
 runtime:
@@ -29,8 +31,8 @@ runtime:
 
 rollout:
   per_sample: 4
-  summary_image_budget: 12
-  summary_tool_images_per_rollout: 3
+  summary_image_budget: 8
+  summary_tool_images_per_rollout: 2
   max_tokens: 8192
 
 validation:
@@ -39,12 +41,29 @@ validation:
   reflection_max_samples: 4
 
 experience:
+  api_max_retries: 2
+  api_timeout: 180
+  image_api_timeout: 120
+  default_max_tokens: 4096
+  critique_retries: 1
+  critique_max_tokens: 2048
+  trajectory_retries: 1
+  trajectory_max_tokens: 4096
   large_batch: 8
   generation_workers: 2
   max_items: 90
   image_caption_workers: 4
 
+  embedding:
+    max_retries: 2
+    timeout: 30
+
   library:
+    max_retries: 1
+    merge_max_tokens: 1024
+    merge_api_timeout: 30
+    refine_max_tokens: 4096
+    refine_api_timeout: 90
     merge_similarity_threshold: 0.7
     reduction_similarity_threshold: 0.6
     similarity_top_k: 10
@@ -61,6 +80,7 @@ experience:
     max_overflow: 12
 
 memory:
+  retrieval_workers: 4
   reuse_train_benchmark_for_test_only:
     MMBrowseComp: BrowseComp-V3
     VisBrowse-Bench: BrowseComp-V3
@@ -68,6 +88,12 @@ memory:
   rerank_top_experiences: 8
 
 skill:
+  generation_workers: 2
+  generation_max_tokens: 4096
+  generation_reasoner_retries: 1
+  generation_fallback_max_tokens: 4096
+  generation_fallback_timeout: 90
+  generation_fallback_retries: 2
   cluster:
     max_clusters: 12
     min_experiences: 2
@@ -81,6 +107,7 @@ failure_recovery:
   max_llm_calls: 1
   max_candidates: 1
   success_candidates: 3
+  max_tokens: 1024
 
 ablation:
   kind: default
@@ -103,7 +130,7 @@ api:
   reasoning_base_url: "http://115.120.87.159:8082/v1"
   verifier_key_file: configs/keys/qwen_openai.keys
   verifier_base_url: "https://api.llm.ustc.edu.cn/v1"
-  experience_key_file: configs/keys/qwen_openai.keys
+  experience_key_file: configs/keys/qwen_openai2.keys
   experience_base_url: "https://api.llm.ustc.edu.cn/v1"
   experience_embedding_key_file: configs/keys/huawei.keys
   experience_embedding_base_url: "http://115.120.87.159:8082/v1"

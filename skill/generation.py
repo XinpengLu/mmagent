@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -21,6 +23,7 @@ from experience.schema import (
     normalize_experience_library,
     normalize_experience_record,
 )
+from configs.runtime import runtime_setting
 from .config import SkillSettings
 from .failure_recovery import synthesize_recovery_experiences
 from .filters import experience_failed_validation, experience_low_validation_quality
@@ -66,6 +69,7 @@ SKILL_ID_REUSE_MIN_LINK_OVERLAP = 0.5
 SKILL_FEEDBACK_REUSE_MIN_LINK_OVERLAP = 0.34
 VALIDATION_MIN_USES_TO_DISABLE = 3
 VALIDATION_DISABLE_AVERAGE_THRESHOLD = 0.01
+SKILL_GENERATION_CACHE_VERSION = 1
 VALIDATION_DISABLE_PASS_THRESHOLD = 0.0
 LOW_QUALITY_SKILL_MIN_VALIDATION_AVG = 0.12
 LOW_QUALITY_SKILL_MAX_PASS_RATE = 0.25
@@ -113,7 +117,14 @@ def _cluster_tags_compatible(record_a: Dict[str, Any], record_b: Dict[str, Any])
     return bool(tags_a & tags_b)
 
 
-def _try_content_embeddings(records: List[Dict[str, Any]]) -> Optional[np.ndarray]:
+def _try_content_embeddings(
+    records: List[Dict[str, Any]],
+    *,
+    record_ids: Optional[List[str]] = None,
+    embedding_experiences: Optional[ExperienceLibrary] = None,
+    cache_dir: Optional[str] = None,
+    experience_library_path: Optional[str] = None,
+) -> Optional[np.ndarray]:
     api_key = os.environ.get("EXPERIENCE_EMBEDDING_API_KEY")
     endpoint = os.environ.get("EXPERIENCE_EMBEDDING_ENDPOINT")
     if not api_key or not endpoint:
@@ -121,15 +132,28 @@ def _try_content_embeddings(records: List[Dict[str, Any]]) -> Optional[np.ndarra
     try:
         from experience.retriever import ExperienceRetriever
 
+        if embedding_experiences is not None and record_ids is not None:
+            indexed_records = normalize_experience_library(embedding_experiences)
+            target_ids = record_ids
+        else:
+            indexed_records = {
+                f"cluster_{idx}": record
+                for idx, record in enumerate(records)
+            }
+            target_ids = list(indexed_records)
         retriever = ExperienceRetriever(
-            experiences={},
+            experiences=indexed_records,
             embedding_model=os.environ.get("EXPERIENCE_EMBEDDING_MODEL", "text-embedding-3-small"),
             embedding_api_key=api_key,
             embedding_endpoint=endpoint,
-            enable_cache=False,
+            cache_dir=cache_dir,
+            enable_cache=True,
+            experience_library_path=experience_library_path,
         )
-        texts = [record["content"] for record in records]
-        embeddings = retriever._generate_embeddings_batch(texts, batch_size=max(1, len(texts)))
+        embeddings = [
+            retriever._experience_embeddings.get(exp_id)
+            for exp_id in target_ids
+        ]
         valid = [emb for emb in embeddings if emb is not None]
         if len(valid) == len(records):
             return np.vstack(valid)
@@ -163,6 +187,10 @@ def _majority_tags(records: List[Dict[str, Any]], key: str) -> List[str]:
 def _cluster_by_tags_and_content(
     experiences: ExperienceLibrary,
     similarity_threshold: Optional[float] = None,
+    *,
+    embedding_experiences: Optional[ExperienceLibrary] = None,
+    cache_dir: Optional[str] = None,
+    experience_library_path: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Cluster experiences by embedding similarity, with tag-only fallback."""
     similarity_threshold = (
@@ -176,7 +204,13 @@ def _cluster_by_tags_and_content(
         return []
 
     records = [record for _, record in items]
-    embeddings = _try_content_embeddings(records)
+    embeddings = _try_content_embeddings(
+        records,
+        record_ids=[exp_id for exp_id, _ in items],
+        embedding_experiences=embedding_experiences,
+        cache_dir=cache_dir,
+        experience_library_path=experience_library_path,
+    )
 
     if embeddings is None:
         groups: Dict[Tuple[Tuple[str, ...], Tuple[str, ...]], List[Tuple[str, Dict[str, Any]]]] = {}
@@ -998,6 +1032,45 @@ def _cluster_skill_metadata(
     return provisional_skill_id, exp_ids, records, metadata, skill_source_ids
 
 
+def _build_skill_generation_prompt(
+    *,
+    provisional_skill_id: str,
+    exp_ids: List[str],
+    skill_source_ids: List[str],
+    updated: ExperienceLibrary,
+    metadata: Dict[str, Any],
+) -> str:
+    skill_type = metadata.get("skill_type", "action_skill")
+    source_ids = skill_source_ids if skill_type in {"action_skill", "recovery_action_skill"} else exp_ids
+    skill_source_records = [updated[exp_id] for exp_id in skill_source_ids if exp_id in updated]
+    exp_text = "\n\n".join(
+        f"[{exp_id}] {format_experience_for_prompt(exp_id, updated[exp_id])}"
+        for exp_id in source_ids
+        if exp_id in updated
+    )
+    return GENERATE_CLUSTER_SKILL_PROMPT.format(
+        skill_id=provisional_skill_id,
+        task_tags=", ".join(metadata.get("task_tags", [])) or "general",
+        tool_tags=", ".join(metadata.get("tool_tags", [])) or "reasoning",
+        experience_ids=", ".join(exp_ids),
+        experiences=exp_text,
+        rollout_evidence=_read_rollout_evidence(skill_source_records),
+    )
+
+
+def _skill_generation_fingerprint(prompt: str, llm: Any) -> str:
+    payload = {
+        "version": SKILL_GENERATION_CACHE_VERSION,
+        "prompt": prompt,
+        "model_name": str(getattr(llm, "model_name", "") or ""),
+        "fallback_model_name": str(getattr(llm, "critique_model_name", "") or ""),
+        "max_tokens": max(1, int(runtime_setting("skill.generation_max_tokens", 4096))),
+        "fallback_max_tokens": max(1, int(runtime_setting("skill.generation_fallback_max_tokens", 4096))),
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 def _generate_skill_content(
     *,
     provisional_skill_id: str,
@@ -1007,6 +1080,7 @@ def _generate_skill_content(
     updated: ExperienceLibrary,
     metadata: Dict[str, Any],
     llm: Any,
+    prompt: Optional[str] = None,
 ) -> str:
     skill_type = metadata.get("skill_type", "action_skill")
     fallback_title = metadata.get("name") or _title_from_tags(
@@ -1014,20 +1088,12 @@ def _generate_skill_content(
         metadata.get("tool_tags", []),
         skill_type,
     )
-    source_ids = skill_source_ids if skill_type in {"action_skill", "recovery_action_skill"} else exp_ids
-    skill_source_records = [updated[exp_id] for exp_id in skill_source_ids if exp_id in updated]
-    exp_text = "\n\n".join(
-        f"[{exp_id}] {format_experience_for_prompt(exp_id, updated[exp_id])}"
-        for exp_id in source_ids
-        if exp_id in updated
-    )
-    prompt = GENERATE_CLUSTER_SKILL_PROMPT.format(
-        skill_id=provisional_skill_id,
-        task_tags=", ".join(metadata.get("task_tags", [])) or "general",
-        tool_tags=", ".join(metadata.get("tool_tags", [])) or "reasoning",
-        experience_ids=", ".join(exp_ids),
-        experiences=exp_text,
-        rollout_evidence=_read_rollout_evidence(skill_source_records),
+    prompt = prompt or _build_skill_generation_prompt(
+        provisional_skill_id=provisional_skill_id,
+        exp_ids=exp_ids,
+        skill_source_ids=skill_source_ids,
+        updated=updated,
+        metadata=metadata,
     )
 
     if skill_type == "failure_guardrail":
@@ -1037,12 +1103,37 @@ def _generate_skill_content(
         return _fallback_skill_content(fallback_title, records, metadata)
 
     try:
-        skill_content = llm.chat(prompt, max_tokens=4096).strip()
+        skill_content = llm.chat(
+            prompt,
+            max_tokens=max(1, int(runtime_setting("skill.generation_max_tokens", 4096))),
+            max_retries=max(1, int(runtime_setting("skill.generation_reasoner_retries", 1))),
+        ).strip()
+    except Exception as reasoner_error:
+        print(
+            f"  [Skill Cluster] Reasoner failed for {provisional_skill_id}: "
+            f"{reasoner_error}; using chat fallback."
+        )
+        try:
+            skill_content = llm.chat(
+                prompt,
+                max_tokens=max(1, int(runtime_setting("skill.generation_fallback_max_tokens", 4096))),
+                model_name=getattr(llm, "critique_model_name", None),
+                timeout=max(1, int(runtime_setting("skill.generation_fallback_timeout", 90))),
+                max_retries=max(1, int(runtime_setting("skill.generation_fallback_retries", 2))),
+            ).strip()
+        except Exception as fallback_error:
+            print(
+                f"  [Skill Cluster] Warning: failed to generate {provisional_skill_id} "
+                f"with reasoner and chat fallback: {fallback_error}"
+            )
+            skill_content = ""
+
+    try:
         skill_content = re.sub(r"^```markdown\n", "", skill_content)
         skill_content = re.sub(r"^```\n", "", skill_content)
         skill_content = re.sub(r"\n```$", "", skill_content).strip()
     except Exception as e:
-        print(f"  [Skill Cluster] Warning: failed to generate {provisional_skill_id}: {e}")
+        print(f"  [Skill Cluster] Warning: failed to clean {provisional_skill_id}: {e}")
         skill_content = ""
     return skill_content or _fallback_skill_content(fallback_title, records, metadata)
 
@@ -1055,6 +1146,85 @@ def _skill_generation_sources(experiences: ExperienceLibrary) -> ExperienceLibra
         and not experience_low_validation_quality(record)
         and not _mixed_task_record(record)
     }
+
+
+def _skill_source_fingerprint(
+    experiences: ExperienceLibrary,
+    *,
+    args: Any = None,
+    llm: Any = None,
+) -> str:
+    stable = {}
+    for exp_id, record in sorted(experiences.items(), key=lambda item: _exp_sort_key(item[0])):
+        item = dict(record)
+        item.pop("skill_ids", None)
+        stats = dict(item.get("stats") or {})
+        for key in ("used_count", "success_after_used", "failure_after_used"):
+            stats.pop(key, None)
+        item["stats"] = stats
+        stable[exp_id] = item
+
+    model_name = str(
+        getattr(llm, "model_name", "")
+        or os.environ.get("EXPERIENCE_MODEL_NAME", "")
+    )
+    fallback_model_name = str(
+        getattr(llm, "critique_model_name", "")
+        or os.environ.get("EXPERIENCE_CRITIQUE_MODEL_NAME", "")
+        or model_name
+    )
+    policy = {
+        "version": SKILL_GENERATION_CACHE_VERSION,
+        "prompt_template_hash": hashlib.sha256(
+            GENERATE_CLUSTER_SKILL_PROMPT.encode("utf-8")
+        ).hexdigest(),
+        "max_clusters": int(getattr(args, "skill_cluster_max_clusters", 16) or 16),
+        "min_experiences": int(getattr(args, "skill_cluster_min_experiences", 2) or 2),
+        "similarity_threshold": float(_settings().cluster_similarity_threshold),
+        "model_name": model_name,
+        "fallback_model_name": fallback_model_name,
+        "generation_max_tokens": max(1, int(runtime_setting("skill.generation_max_tokens", 4096))),
+        "fallback_max_tokens": max(1, int(runtime_setting("skill.generation_fallback_max_tokens", 4096))),
+        "embedding_model": os.environ.get("EXPERIENCE_EMBEDDING_MODEL", "text-embedding-3-small"),
+        "embedding_enabled": bool(
+            os.environ.get("EXPERIENCE_EMBEDDING_API_KEY")
+            and os.environ.get("EXPERIENCE_EMBEDDING_ENDPOINT")
+        ),
+        "failure_recovery_enabled": bool(getattr(args, "ablation_failure_recovery", True)),
+    }
+    encoded = json.dumps(
+        {"experiences": stable, "policy": policy},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def skill_generation_is_current(
+    experiences: ExperienceLibrary,
+    skill_library_path: str,
+    *,
+    args: Any = None,
+    llm: Any = None,
+) -> bool:
+    normalized = _cap_experience_count(normalize_experience_library(experiences))
+    source_records = _skill_generation_sources(normalized)
+    index = load_skill_index(skill_library_path)
+    if index.get("source_experience_fingerprint") != _skill_source_fingerprint(
+        source_records,
+        args=args,
+        llm=llm,
+    ):
+        return False
+    for item in (index.get("skills", {}) or {}).values():
+        if not isinstance(item, dict):
+            return False
+        path = Path(str(item.get("path") or ""))
+        if not path.exists() or not path.is_file() or path.stat().st_size <= 0:
+            return False
+    return True
 
 
 def _reset_experience_skill_links(experiences: ExperienceLibrary) -> ExperienceLibrary:
@@ -1096,21 +1266,142 @@ def _write_cluster_skill(
     out_dir: Path,
     llm: Any,
 ) -> str:
+    prepared = _prepare_cluster_skill(cluster, updated, out_dir, llm)
+    skill_content = _generate_prepared_skill(prepared, updated=updated, llm=llm)
+    return _write_prepared_skill(
+        prepared,
+        skill_content,
+        updated=updated,
+        index=index,
+        active_skill_ids=active_skill_ids,
+        out_dir=out_dir,
+    )
+
+
+def _prepare_cluster_skill(
+    cluster: Dict[str, Any],
+    updated: ExperienceLibrary,
+    out_dir: Path,
+    llm: Any,
+) -> Dict[str, Any]:
     provisional_skill_id, exp_ids, records, metadata, skill_source_ids = _cluster_skill_metadata(
         cluster, updated, out_dir
     )
-    skill_type = metadata.get("skill_type", "action_skill")
-    skill_content = _generate_skill_content(
+    prompt = _build_skill_generation_prompt(
         provisional_skill_id=provisional_skill_id,
         exp_ids=exp_ids,
-        records=records,
         skill_source_ids=skill_source_ids,
         updated=updated,
         metadata=metadata,
-        llm=llm,
     )
-    display_name = _extract_skill_title(skill_content) or metadata.get("name") or provisional_skill_id
-    skill_id = _find_previous_skill_by_overlap(
+    metadata.update({
+        "generation_fingerprint": _skill_generation_fingerprint(prompt, llm),
+        "generation_version": SKILL_GENERATION_CACHE_VERSION,
+        "generation_model_name": str(getattr(llm, "model_name", "") or ""),
+        "generation_fallback_model_name": str(getattr(llm, "critique_model_name", "") or ""),
+    })
+    return {
+        "provisional_skill_id": provisional_skill_id,
+        "exp_ids": exp_ids,
+        "records": records,
+        "metadata": metadata,
+        "skill_source_ids": skill_source_ids,
+        "prompt": prompt,
+    }
+
+
+def _generate_prepared_skill(
+    prepared: Dict[str, Any],
+    *,
+    updated: ExperienceLibrary,
+    llm: Any,
+) -> str:
+    return _generate_skill_content(
+        provisional_skill_id=prepared["provisional_skill_id"],
+        exp_ids=prepared["exp_ids"],
+        records=prepared["records"],
+        skill_source_ids=prepared["skill_source_ids"],
+        updated=updated,
+        metadata=prepared["metadata"],
+        llm=llm,
+        prompt=prepared["prompt"],
+    )
+
+
+def _cached_skill_for_prepared(
+    prepared: Dict[str, Any],
+    index: SkillIndex,
+    reserved_skill_ids: set,
+) -> Optional[Tuple[str, str, Dict[str, Any]]]:
+    metadata = prepared["metadata"]
+    linked_ids = set(metadata.get("linked_experience_ids", []) or [])
+    fingerprint = metadata.get("generation_fingerprint")
+    for skill_id, previous in (index.get("skills", {}) or {}).items():
+        if skill_id in reserved_skill_ids or not isinstance(previous, dict):
+            continue
+        if previous.get("skill_type") != metadata.get("skill_type"):
+            continue
+        if set(previous.get("linked_experience_ids", []) or []) != linked_ids:
+            continue
+        previous_fingerprint = previous.get("generation_fingerprint")
+        if previous_fingerprint:
+            if previous_fingerprint != fingerprint:
+                continue
+        elif not (
+            set(previous.get("task_tags", []) or []) == set(metadata.get("task_tags", []) or [])
+            and set(previous.get("tool_tags", []) or []) == set(metadata.get("tool_tags", []) or [])
+            and dict(previous.get("support_counts", {}) or {}) == dict(metadata.get("support_counts", {}) or {})
+        ):
+            continue
+        path = Path(str(previous.get("path") or ""))
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            content = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if content:
+            return skill_id, content, previous
+    return None
+
+
+def _assign_cached_skills(prepared_skills: List[Dict[str, Any]], index: SkillIndex) -> int:
+    reserved_skill_ids = set()
+    reused = 0
+    for prepared in prepared_skills:
+        cached = _cached_skill_for_prepared(prepared, index, reserved_skill_ids)
+        if cached is None:
+            continue
+        skill_id, content, previous = cached
+        prepared["cached_skill_id"] = skill_id
+        prepared["cached_skill_content"] = content
+        prepared["cached_previous"] = previous
+        reserved_skill_ids.add(skill_id)
+        reused += 1
+    return reused
+
+
+def _write_prepared_skill(
+    prepared: Dict[str, Any],
+    skill_content: str,
+    *,
+    updated: ExperienceLibrary,
+    index: SkillIndex,
+    active_skill_ids: set,
+    out_dir: Path,
+) -> str:
+    metadata = prepared["metadata"]
+    provisional_skill_id = prepared["provisional_skill_id"]
+    skill_type = metadata.get("skill_type", "action_skill")
+    cached_skill_id = str(prepared.get("cached_skill_id") or "")
+    cached_previous = prepared.get("cached_previous") if isinstance(prepared.get("cached_previous"), dict) else {}
+    display_name = (
+        str(cached_previous.get("name") or "").strip()
+        or _extract_skill_title(skill_content)
+        or metadata.get("name")
+        or provisional_skill_id
+    )
+    skill_id = cached_skill_id or _find_previous_skill_by_overlap(
         index,
         metadata.get("linked_experience_ids", []),
         skill_type,
@@ -1118,13 +1409,16 @@ def _write_cluster_skill(
     ) or _skill_id_from_title(display_name, skill_type, active_skill_ids)
     active_skill_ids.add(skill_id)
 
+    skill_path = str(cached_previous.get("path") or out_dir / f"{skill_id}.md")
     metadata.update({
         "skill_id": skill_id,
         "name": display_name,
-        "path": str(out_dir / f"{skill_id}.md"),
+        "path": skill_path,
     })
     previous = index.get("skills", {}).get(skill_id, {})
     _copy_previous_skill_metadata(metadata, previous)
+    if cached_skill_id and previous.get("updated_at"):
+        metadata["updated_at"] = previous["updated_at"]
     _inherit_validation_feedback(
         metadata,
         index,
@@ -1133,10 +1427,14 @@ def _write_cluster_skill(
     )
     _reset_revised_recovery_validation(metadata, previous, updated)
 
-    Path(metadata["path"]).write_text(
-        _rewrite_skill_frontmatter_name(skill_content, display_name),
-        encoding="utf-8",
-    )
+    if not cached_skill_id:
+        skill_path_obj = Path(metadata["path"])
+        tmp_path = skill_path_obj.with_suffix(skill_path_obj.suffix + ".tmp")
+        tmp_path.write_text(
+            _rewrite_skill_frontmatter_name(skill_content, display_name),
+            encoding="utf-8",
+        )
+        tmp_path.replace(skill_path_obj)
     index["skills"][skill_id] = metadata
     _attach_skill_to_experiences(updated, metadata.get("linked_experience_ids", []), skill_id)
     return skill_id
@@ -1174,25 +1472,68 @@ def cluster_experiences_to_skills(
     max_clusters = int(getattr(args, "skill_cluster_max_clusters", 16) or 16)
     min_exps = int(getattr(args, "skill_cluster_min_experiences", 2) or 2)
     clusters = _select_skill_clusters(
-        _cluster_by_tags_and_content(skill_source_records),
+        _cluster_by_tags_and_content(
+            skill_source_records,
+            embedding_experiences=normalized,
+            cache_dir=(
+                os.path.dirname(args.experience_library)
+                if getattr(args, "experience_library", None)
+                else None
+            ),
+            experience_library_path=getattr(args, "experience_library", None),
+        ),
         max_clusters=max_clusters,
         min_exps=min_exps,
     )
 
     updated = _reset_experience_skill_links(normalized)
-    active_skill_ids = set()
-    for cluster in clusters:
-        _write_cluster_skill(
-            cluster,
+    prepared_skills = [_prepare_cluster_skill(cluster, updated, out_dir, llm) for cluster in clusters]
+    reused_skills = _assign_cached_skills(prepared_skills, index)
+    if reused_skills:
+        print(f"  [Skill Cluster] Reused {reused_skills}/{len(prepared_skills)} unchanged skill(s).")
+    active_skill_ids = {
+        str(prepared.get("cached_skill_id"))
+        for prepared in prepared_skills
+        if prepared.get("cached_skill_id")
+    }
+    pending_skills = [prepared for prepared in prepared_skills if not prepared.get("cached_skill_id")]
+    generation_workers = max(
+        1,
+        min(len(pending_skills), int(runtime_setting("skill.generation_workers", 2))),
+    ) if pending_skills else 1
+    if pending_skills:
+        print(f"  [Skill Cluster] Skill generation workers: {generation_workers}/{len(pending_skills)} pending")
+    generated_contents: Dict[int, str] = {}
+    if generation_workers > 1 and pending_skills:
+        with ThreadPoolExecutor(max_workers=generation_workers) as executor:
+            futures = {
+                id(prepared): executor.submit(_generate_prepared_skill, prepared, updated=updated, llm=llm)
+                for prepared in pending_skills
+            }
+            for prepared in pending_skills:
+                generated_contents[id(prepared)] = futures[id(prepared)].result()
+    elif pending_skills:
+        for prepared in pending_skills:
+            generated_contents[id(prepared)] = _generate_prepared_skill(prepared, updated=updated, llm=llm)
+
+    for prepared in prepared_skills:
+        skill_content = str(prepared.get("cached_skill_content") or generated_contents.get(id(prepared), ""))
+        _write_prepared_skill(
+            prepared,
+            skill_content,
             updated=updated,
             index=index,
             active_skill_ids=active_skill_ids,
             out_dir=out_dir,
-            llm=llm,
         )
         save_skill_index(skill_library_path, index)
 
     prune_stale_skills(index, active_skill_ids, out_dir)
+    index["source_experience_fingerprint"] = _skill_source_fingerprint(
+        skill_source_records,
+        args=args,
+        llm=llm,
+    )
     save_skill_index(skill_library_path, index)
     print(f"  [Skill Cluster] Generated/updated {len(clusters)} modular skills in {out_dir}")
     return updated

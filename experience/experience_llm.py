@@ -1,4 +1,5 @@
 ﻿import os
+import random
 import time
 import requests
 from typing import Optional, Dict, List, Union, Any
@@ -18,6 +19,13 @@ def is_openai_reasoning_model(model_name: str) -> bool:
 
 def default_system_prompt() -> str:
     return "You are an expert at summarizing visual reasoning trajectories and extracting generalizable experiences."
+
+
+def is_multimodal_content(user_content: Union[str, List[Dict[str, Any]]]) -> bool:
+    return isinstance(user_content, list) and any(
+        isinstance(item, dict) and item.get("type") == "image_url"
+        for item in user_content
+    )
 
 
 def build_chat_payload(
@@ -49,9 +57,20 @@ class ExperienceLLM:
     def __init__(self, model_name: Optional[str] = None):
         self.settings = ExperienceLLMSettings.from_env(model_name)
         self.model_name = self.settings.model_name
+        self.image_model_name = self.settings.image_model_name
+        self.critique_model_name = self.settings.critique_model_name
 
-    def chat(self, prompt: str, max_tokens: Optional[int] = None, temperature: Optional[float] = None, top_p: float = 1.0) -> str:
-        max_tokens = self.settings.default_max_tokens
+    def chat(
+        self,
+        prompt: str,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        top_p: float = 1.0,
+        model_name: Optional[str] = None,
+        timeout: Optional[int] = None,
+        max_retries: Optional[int] = None,
+    ) -> str:
+        max_tokens = self.settings.default_max_tokens if max_tokens is None else max_tokens
         t = temperature if temperature is not None else 0.6
         return self._call_api(
             user_content=prompt,
@@ -59,6 +78,9 @@ class ExperienceLLM:
             temperature=t,
             top_p=top_p,
             api_name="Experience API",
+            model_name=model_name,
+            timeout=timeout,
+            max_retries=max_retries,
         )
 
 
@@ -71,17 +93,23 @@ class ExperienceLLM:
         system_prompt: Optional[str] = None,
         timeout: Optional[int] = None,
         api_name: str = "Experience API",
+        model_name: Optional[str] = None,
+        max_retries: Optional[int] = None,
     ) -> str:
         """Call the configured experience API with bounded retries."""
-        max_retries = self.settings.max_retries
+        max_retries = self.settings.max_retries if max_retries is None else max(1, int(max_retries))
         api_key = os.environ.get("EXPERIENCE_API_KEY", "")
         endpoint = os.environ.get("EXPERIENCE_END_POINT", "").rstrip("/")
         if not api_key or not endpoint:
             raise ValueError("EXPERIENCE_API_KEY and EXPERIENCE_END_POINT must be set")
 
+        selected_model_name = model_name or (
+            self.image_model_name if is_multimodal_content(user_content) else self.model_name
+        )
         return self._try_single_experience_api(
             api_key,
             endpoint,
+            selected_model_name,
             user_content,
             max_tokens,
             temperature,
@@ -96,6 +124,7 @@ class ExperienceLLM:
         self, 
         api_key: str, 
         end_point: str, 
+        model_name: str,
         user_content: Union[str, List[Dict[str, Any]]], 
         max_tokens: int, 
         temperature: float, 
@@ -108,7 +137,7 @@ class ExperienceLLM:
         """Call one configured endpoint with bounded retries."""
         timeout = self.settings.api_timeout if timeout is None else timeout
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
-        payload = build_chat_payload(self.model_name, user_content, max_tokens, temperature, top_p, system_prompt)
+        payload = build_chat_payload(model_name, user_content, max_tokens, temperature, top_p, system_prompt)
         last_error = ""
 
         for attempt_idx in range(max_retries):
@@ -121,7 +150,7 @@ class ExperienceLLM:
                     response_data = None
                 log_api_usage(
                     source=api_name,
-                    model=self.model_name,
+                    model=model_name,
                     endpoint=end_point,
                     payload=payload,
                     response_data=response_data,
@@ -151,7 +180,7 @@ class ExperienceLLM:
                 reason = "timeout" if isinstance(e, requests.exceptions.Timeout) else str(e)
                 log_api_usage(
                     source=api_name,
-                    model=self.model_name,
+                    model=model_name,
                     endpoint=end_point,
                     payload=payload,
                     success=False,
@@ -167,7 +196,11 @@ class ExperienceLLM:
                 print(last_error)
 
             if attempt < max_retries:
-                time.sleep(min(self.settings.base_wait * (2 ** attempt_idx), self.settings.max_wait))
+                wait_time = min(
+                    self.settings.base_wait * (2 ** attempt_idx) + random.uniform(0.0, 1.0),
+                    self.settings.max_wait,
+                )
+                time.sleep(wait_time)
 
         raise RuntimeError(last_error or f"[{api_name}] All retry attempts exhausted")
 
@@ -175,7 +208,21 @@ class ExperienceLLM:
         if resp.status_code != 200:
             return ""
         data = resp.json()
-        return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        choices = data.get("choices") or []
+        if not choices or not isinstance(choices[0], dict):
+            return ""
+        message = choices[0].get("message") or {}
+        content = message.get("content")
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts = [
+                item.get("text", "").strip()
+                for item in content
+                if isinstance(item, dict) and isinstance(item.get("text"), str)
+            ]
+            return "\n".join(part for part in parts if part)
+        return ""
 
     def response_error_message(self, api_name: str, resp: requests.Response, attempt: int, max_retries: int) -> str:
         try:
@@ -218,5 +265,6 @@ class ExperienceLLM:
             system_prompt="You are an expert at analyzing images and providing detailed visual descriptions.",
             timeout=self.settings.image_api_timeout,
             api_name="Multimodal Experience API",
+            model_name=self.image_model_name,
         )
 

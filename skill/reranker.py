@@ -438,6 +438,7 @@ def rerank_memory_with_llm(
             prompt,
             max_tokens=settings.rerank_max_tokens,
             temperature=settings.rerank_temperature,
+            model_name=getattr(llm, "critique_model_name", None),
         )
         selected_skills, selected_experiences, skill_ids, exp_ids, dropped_skill_ids, parsed = (
             _select_from_rerank_response(

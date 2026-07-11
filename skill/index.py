@@ -37,6 +37,8 @@ def save_skill_index(skill_library_path: str, index: SkillIndex) -> None:
     path = skill_index_path(skill_library_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     compact_index = {"schema_version": index.get("schema_version", 1), "skills": {}}
+    if index.get("source_experience_fingerprint"):
+        compact_index["source_experience_fingerprint"] = index["source_experience_fingerprint"]
     for skill_id, item in (index.get("skills", {}) or {}).items():
         if not isinstance(item, dict):
             continue
@@ -63,13 +65,19 @@ def save_skill_index(skill_library_path: str, index: SkillIndex) -> None:
             "disabled_reason",
             "stats",
             "needs_refine",
+            "generation_fingerprint",
+            "generation_version",
+            "generation_model_name",
+            "generation_fallback_model_name",
         ):
             value = item.get(key)
             if value not in (None, "", [], {}):
                 compact_item[key] = value
         compact_index["skills"][skill_id] = compact_item
-    with path.open("w", encoding="utf-8") as f:
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with tmp_path.open("w", encoding="utf-8") as f:
         json.dump(compact_index, f, ensure_ascii=False, indent=2)
+    tmp_path.replace(path)
 
 
 def prune_stale_skills(index: SkillIndex, active_skill_ids: set, out_dir: Path) -> None:
@@ -92,5 +100,3 @@ def prune_stale_skills(index: SkillIndex, active_skill_ids: set, out_dir: Path) 
             except Exception:
                 pass
         del skills[skill_id]
-
-

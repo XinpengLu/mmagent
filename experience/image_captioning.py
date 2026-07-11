@@ -103,7 +103,9 @@ def save_caption_cache(
     try:
         cache_path = caption_cache_path(sample_path, target["rollout_dir"], target["filename"], cache_dir)
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(caption, encoding="utf-8")
+        tmp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
+        tmp_path.write_text(caption, encoding="utf-8")
+        tmp_path.replace(cache_path)
     except Exception as e:
         print(f"  Warning: Failed to save caption cache for {target['caption_key']}: {e}")
 

@@ -7,7 +7,7 @@ from .filters import (
     experience_unvalidated_recovery,
     filter_experiences_for_inference,
 )
-from .generation import cluster_experiences_to_skills
+from .generation import cluster_experiences_to_skills, skill_generation_is_current
 from .index import (
     SkillIndex,
     load_skill_index,
@@ -42,6 +42,7 @@ __all__ = [
     "retrieve_skills_for_task",
     "save_skill_index",
     "skill_index_path",
+    "skill_generation_is_current",
     "skill_root",
     "skills_dir",
     "update_memory_usage_after_sample",

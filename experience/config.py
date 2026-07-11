@@ -12,6 +12,8 @@ from configs.runtime import runtime_setting
 @dataclass(frozen=True)
 class ExperienceLLMSettings:
     model_name: str
+    image_model_name: str
+    critique_model_name: str
     max_retries: int
     base_wait: float
     max_wait: float
@@ -21,11 +23,17 @@ class ExperienceLLMSettings:
 
     @classmethod
     def from_env(cls, model_name: Optional[str] = None) -> "ExperienceLLMSettings":
+        resolved_model_name = model_name or os.environ.get("EXPERIENCE_MODEL_NAME", "gpt-4o")
         return cls(
-            model_name=model_name or os.environ.get("EXPERIENCE_MODEL_NAME", "gpt-4o"),
-            max_retries=3,
+            model_name=resolved_model_name,
+            image_model_name=os.environ.get("EXPERIENCE_IMAGE_MODEL_NAME") or resolved_model_name,
+            critique_model_name=os.environ.get("EXPERIENCE_CRITIQUE_MODEL_NAME") or resolved_model_name,
+            max_retries=max(1, int(runtime_setting("experience.api_max_retries", 2))),
             base_wait=1.0,
             max_wait=30.0,
+            api_timeout=max(1, int(runtime_setting("experience.api_timeout", 180))),
+            image_api_timeout=max(1, int(runtime_setting("experience.image_api_timeout", 120))),
+            default_max_tokens=max(1, int(runtime_setting("experience.default_max_tokens", 4096))),
         )
 
 
@@ -49,10 +57,10 @@ class ExperienceGenerationSettings:
     @classmethod
     def from_runtime(cls) -> "ExperienceGenerationSettings":
         return cls(
-            critique_retries=3,
-            critique_max_tokens=4096,
-            trajectory_retries=3,
-            trajectory_max_tokens=4096,
+            critique_retries=max(1, int(runtime_setting("experience.critique_retries", 1))),
+            critique_max_tokens=max(1, int(runtime_setting("experience.critique_max_tokens", 2048))),
+            trajectory_retries=max(1, int(runtime_setting("experience.trajectory_retries", 1))),
+            trajectory_max_tokens=max(1, int(runtime_setting("experience.trajectory_max_tokens", 4096))),
             trajectory_max_initial_prompt_chars=12000,
             trajectory_max_text_output_chars=6000,
             trajectory_max_tool_code_chars=6000,
@@ -60,7 +68,7 @@ class ExperienceGenerationSettings:
             trajectory_max_other_field_chars=3000,
             trajectory_image_budget=int(runtime_setting("rollout.summary_image_budget", 12)),
             trajectory_tool_images_per_rollout=int(runtime_setting("rollout.summary_tool_images_per_rollout", 3)),
-            caption_max_tokens=512,
+            caption_max_tokens=max(1, int(runtime_setting("experience.caption_max_tokens", 512))),
             caption_workers=int(runtime_setting("experience.image_caption_workers", 4)),
             caption_temperature=0.3,
         )
@@ -78,8 +86,8 @@ class EmbeddingSettings:
     @classmethod
     def from_runtime(cls) -> "EmbeddingSettings":
         return cls(
-            max_retries=3,
-            timeout=60,
+            max_retries=max(1, int(runtime_setting("experience.embedding.max_retries", 2))),
+            timeout=max(1, int(runtime_setting("experience.embedding.timeout", 30))),
             max_concurrency=4,
             batch_size=30,
             max_input_chars=12000,
@@ -121,19 +129,25 @@ class ExperienceRetrievalSettings:
 @dataclass(frozen=True)
 class ExperienceLibrarySettings:
     max_retries: int
+    merge_max_tokens: int
+    merge_api_timeout: int
     merge_similarity_threshold: float
     reduction_similarity_threshold: float
     similarity_search_top_k: int
     reduction_max_rounds: int
     refine_max_tokens: int
+    refine_api_timeout: int
 
     @classmethod
     def from_runtime(cls) -> "ExperienceLibrarySettings":
         return cls(
-            max_retries=3,
+            max_retries=max(1, int(runtime_setting("experience.library.max_retries", 1))),
+            merge_max_tokens=max(1, int(runtime_setting("experience.library.merge_max_tokens", 512))),
+            merge_api_timeout=max(1, int(runtime_setting("experience.library.merge_api_timeout", 30))),
             merge_similarity_threshold=float(runtime_setting("experience.library.merge_similarity_threshold", 0.70)),
             reduction_similarity_threshold=float(runtime_setting("experience.library.reduction_similarity_threshold", 0.60)),
             similarity_search_top_k=int(runtime_setting("experience.library.similarity_top_k", 10)),
             reduction_max_rounds=int(runtime_setting("experience.library.reduction_max_rounds", 3)),
-            refine_max_tokens=16384,
+            refine_max_tokens=max(1, int(runtime_setting("experience.library.refine_max_tokens", 4096))),
+            refine_api_timeout=max(1, int(runtime_setting("experience.library.refine_api_timeout", 90))),
         )

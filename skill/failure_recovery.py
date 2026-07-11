@@ -228,7 +228,8 @@ class _RecoverySynthesizer:
     def __init__(self, llm: Any, *, max_success_candidates: int = 4):
         self.llm = llm
         self.max_success_candidates = max(1, int(max_success_candidates or 4))
-        self.max_tokens = 1024
+        self.max_tokens = max(1, int(runtime_setting("failure_recovery.max_tokens", 1024)))
+        self.model_name = getattr(llm, "critique_model_name", None)
 
     def propose_recovery(
         self,
@@ -247,7 +248,12 @@ class _RecoverySynthesizer:
             ),
         )
         try:
-            response = self.llm.chat(prompt, max_tokens=self.max_tokens, temperature=0.2).strip()
+            response = self.llm.chat(
+                prompt,
+                max_tokens=self.max_tokens,
+                temperature=0.2,
+                model_name=self.model_name,
+            ).strip()
             parsed = _safe_json_loads(response)
         except Exception as exc:
             print(f"  [Failure Recovery] LLM recovery synthesis failed for {failure_id}: {exc}")

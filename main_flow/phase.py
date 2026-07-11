@@ -73,6 +73,7 @@ class _ExecutionSettings:
     skill_retrieval_min_similarity: float
     memory_rerank_top_skills: int
     memory_rerank_top_experiences: int
+    memory_retrieval_workers: int
     experience_retrieval_top_k: int
     experience_retrieval_min_similarity: float
     ablation_experience_generation: bool
@@ -105,6 +106,7 @@ class _ExecutionSettings:
             skill_retrieval_min_similarity=_setting_float(settings, "skill.retrieval.min_similarity"),
             memory_rerank_top_skills=_setting_int(settings, "memory.rerank_top_skills"),
             memory_rerank_top_experiences=_setting_int(settings, "memory.rerank_top_experiences"),
+            memory_retrieval_workers=_setting_int(settings, "memory.retrieval_workers"),
             experience_retrieval_top_k=_setting_int(settings, "experience.retrieval.top_k"),
             experience_retrieval_min_similarity=_setting_float(settings, "experience.retrieval.min_similarity"),
             ablation_experience_generation=_setting_bool(settings, "ablation.modules.experience_generation", True),
@@ -261,6 +263,7 @@ def _build_phase_env(
     phase: str,
     benchmark: str,
     memory: _MemoryPaths,
+    reuse_train_benchmark: str = "",
 ) -> dict[str, str]:
     return {
         "BENCHMARK": benchmark,
@@ -268,7 +271,7 @@ def _build_phase_env(
         "MEMORY_ROOT": str(memory.memory_root),
         "EXPERIENCE_LIBRARY": str(memory.experience_library),
         "SKILL_LIBRARY": str(memory.skill_library),
-        "REUSE_TRAIN_BENCHMARK": phase_env.get("REUSE_TRAIN_BENCHMARK", ""),
+        "REUSE_TRAIN_BENCHMARK": reuse_train_benchmark,
         "MMAGENT_TRAIN_PHASE": str(phase == "train").lower(),
         "MMAGENT_VALIDATION_PHASE": str(phase == "val").lower(),
     }
@@ -315,6 +318,7 @@ def run_phase(
         phase=phase,
         benchmark=benchmark,
         memory=memory,
+        reuse_train_benchmark=phase_env.get("REUSE_TRAIN_BENCHMARK", ""),
     )
 
     args = _build_execution_args(

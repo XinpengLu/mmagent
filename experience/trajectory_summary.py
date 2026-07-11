@@ -368,11 +368,27 @@ def summarize_rollouts(
     )
 
     prompt = SINGLE_ROLLOUT_SUMMARY.format(trajectory=process_text)
-    response_text = generate_summary_with_retries(
-        prompt,
-        load_question_images(all_images),
-        llm,
-    )
+    prompt_path = Path(sample_dir) / "exp_summary_prompt.txt"
+    response_path = Path(sample_dir) / "exp_summary_resp.txt"
+    response_text = None
+    try:
+        if (
+            prompt_path.exists()
+            and response_path.exists()
+            and prompt_path.read_text(encoding="utf-8") == prompt
+        ):
+            response_text = response_path.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        response_text = None
+
+    if response_text:
+        print("  [Checkpoint] Reused cached trajectory summary.")
+    else:
+        response_text = generate_summary_with_retries(
+            prompt,
+            load_question_images(all_images),
+            llm,
+        )
 
     write_debug_texts(
         sample_dir,

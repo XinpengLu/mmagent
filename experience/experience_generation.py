@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from PIL import Image
@@ -16,6 +17,27 @@ from .utils import find_original_images, write_debug_texts
 
 def settings() -> ExperienceGenerationSettings:
     return ExperienceGenerationSettings.from_runtime()
+
+
+def _cached_debug_response(
+    debug_dir: Optional[str],
+    prompt_name: str,
+    response_name: str,
+    prompt: str,
+) -> Optional[str]:
+    if not debug_dir:
+        return None
+    prompt_path = Path(debug_dir) / prompt_name
+    response_path = Path(debug_dir) / response_name
+    if not prompt_path.exists() or not response_path.exists():
+        return None
+    try:
+        if prompt_path.read_text(encoding="utf-8") != prompt:
+            return None
+        response = response_path.read_text(encoding="utf-8").strip()
+        return response or None
+    except OSError:
+        return None
 
 
 def format_question(question: str, system_prompt: str) -> str:
@@ -55,7 +77,12 @@ def chat_with_sample_images(
             max_tokens=max_tokens,
             temperature=temperature,
         )
-    return llm.chat(prompt, max_tokens=max_tokens, temperature=temperature)
+    return llm.chat(
+        prompt,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        model_name=llm.critique_model_name,
+    )
 
 
 def call_with_retries(
@@ -111,15 +138,24 @@ def experiences_from_rollouts(
         groundtruth=groundtruth or "[REDACTED]",
     )
 
-    start = time.time()
-    response = call_with_retries(
-        "Experience critique",
-        llm,
+    response = _cached_debug_response(
+        debug_dir,
+        "exp_intra_prompt.txt",
+        "exp_intra_resp.txt",
         prompt,
-        debug_dir=debug_dir,
-        max_tokens=settings().critique_max_tokens,
     )
-    print(f"  [Timing] cross rollout critique generation: {time.time() - start:.1f}s")
+    if response:
+        print("  [Checkpoint] Reused cached cross-rollout critique.")
+    else:
+        start = time.time()
+        response = call_with_retries(
+            "Experience critique",
+            llm,
+            prompt,
+            debug_dir=debug_dir,
+            max_tokens=settings().critique_max_tokens,
+        )
+        print(f"  [Timing] cross rollout critique generation: {time.time() - start:.1f}s")
     if response is None:
         raise RuntimeError("Failed to generate experiences after all retries")
 
@@ -202,17 +238,26 @@ def recovery_experience(
     prompt = supervised_correction_prompt(
         question, groundtruth, summaries, system_prompt, used_experiences
     )
-    start = time.time()
-    response = call_with_retries(
-        "supervised correction",
-        llm,
+    response = _cached_debug_response(
+        debug_dir,
+        "exp_supervised_correction_prompt.txt",
+        "exp_supervised_correction_resp.txt",
         prompt,
-        debug_dir=debug_dir,
-        max_tokens=4096,
-        temperature=0.2,
-        raise_on_final_failure=False,
     )
-    print(f"[Timing] supervised correction generation: {time.time() - start:.1f}s")
+    if response:
+        print("  [Checkpoint] Reused cached supervised correction.")
+    else:
+        start = time.time()
+        response = call_with_retries(
+            "supervised correction",
+            llm,
+            prompt,
+            debug_dir=debug_dir,
+            max_tokens=4096,
+            temperature=0.2,
+            raise_on_final_failure=False,
+        )
+        print(f"[Timing] supervised correction generation: {time.time() - start:.1f}s")
 
     write_debug_texts(
         debug_dir,

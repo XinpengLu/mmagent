@@ -98,6 +98,7 @@ class ExperienceRetriever:
         enable_cache: bool = True,
         llm_client: Optional[Any] = None,  # ExperienceLLM instance for task decomposition
         experience_library_path: Optional[str] = None,  # Path to experience library JSON file
+        initialize_embeddings: bool = True,
     ):
         self.embedding_settings = EmbeddingSettings.from_runtime()
         self.retrieval_settings = ExperienceRetrievalSettings.from_runtime()
@@ -141,7 +142,8 @@ class ExperienceRetriever:
         self._cache_metadata_path: Optional[str] = None
 
         self._configure_cache_paths()
-        self._load_or_generate_embeddings()
+        if initialize_embeddings:
+            self._load_or_generate_embeddings()
 
     def _configure_cache_paths(self) -> None:
         if not self.enable_cache:
@@ -488,7 +490,7 @@ class ExperienceRetriever:
             for exp_id, exp_text in normalized_new.items():
                 if exp_id not in self.experiences:
                     new_exp_ids.append(exp_id)
-                elif self.experiences[exp_id] != exp_text:
+                elif self.experiences[exp_id].get("content") != exp_text.get("content"):
                     updated_exp_ids.append(exp_id)
             
             deleted_exp_ids = set(self.experiences.keys()) - set(normalized_new.keys())
@@ -497,6 +499,7 @@ class ExperienceRetriever:
                     del self._experience_embeddings[exp_id]
             
             self.experiences = dict(normalized_new)
+            self._configure_cache_paths()
             
             exp_ids_to_embed = new_exp_ids + updated_exp_ids
             if exp_ids_to_embed:
@@ -510,8 +513,9 @@ class ExperienceRetriever:
                     else:
                         logger.warning(f"Failed to generate embedding for experience {exp_id}")
                 
-                if self._experience_embeddings:
-                    self._save_embeddings_to_cache()
+            if self._experience_embeddings:
+                self._save_embeddings_to_cache()
+                if exp_ids_to_embed:
                     print(f"  Updated embeddings cache")
         else:
             self.experiences = normalize_experience_library(new_experiences)

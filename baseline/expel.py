@@ -48,7 +48,13 @@ def _empty_rule_memory() -> dict[str, Any]:
     return {"version": EXPEL_RULE_MEMORY_VERSION, "rules": [], "logs": [], "completed_question_ids": []}
 
 
-def _chat_text(model_name: str, system_prompt: str, user_prompt: str, max_tokens: int = 512) -> str:
+def _chat_text(
+    model_name: str,
+    system_prompt: str,
+    user_prompt: str,
+    max_tokens: int = 512,
+    max_retries: int = 1,
+) -> str:
     response = call_vision_api(
         model_name,
         [
@@ -56,6 +62,7 @@ def _chat_text(model_name: str, system_prompt: str, user_prompt: str, max_tokens
             {"role": "user", "content": user_prompt},
         ],
         {"temperature": 0.2, "top_p": 1.0, "max_tokens": max_tokens},
+        max_retries=max_retries,
         tools=None,
     )
     if isinstance(response, dict):
@@ -176,6 +183,7 @@ def _update_rules_from_result(
         EXPEL_SYSTEM_PROMPT,
         _rule_operation_prompt(sample, result, rollout_dir, memory["rules"]),
         max_tokens=int(args.expel_rule_max_tokens),
+        max_retries=int(getattr(args, "expel_rule_max_retries", 1)),
     )
     operations = _parse_rule_operations(text)
     memory["rules"] = _limit_rules(
@@ -269,9 +277,14 @@ def _build_expel_rules(config, args) -> list[dict[str, Any]]:
     train_args.phase = "train"
     train_args.input_file = str(train_file)
     train_args.output_dir = str(Path(args.train_output_dir))
-    train_args.rollouts_per_sample = int(args.rollouts_per_sample)
+    train_args.rollouts_per_sample = int(getattr(args, "expel_train_rollouts_per_sample", 1))
     train_args.num_workers = 1
     train_args._sample_system_prompt = config.base_system_prompt
+
+    print(
+        f"[ExpeL] Training with {train_args.rollouts_per_sample} rollout(s) per sample; "
+        f"test remains at {args.rollouts_per_sample}."
+    )
 
     train_question_ids = {_question_id(sample, sample_idx) for sample_idx, sample in enumerate(train_data)}
     completed_ids = _completed_question_ids(memory) & train_question_ids

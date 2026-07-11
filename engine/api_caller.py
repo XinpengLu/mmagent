@@ -16,6 +16,13 @@ API_HIGH_TOKEN_WARNING_THRESHOLD = 25000
 API_MAX_RETRIES = 3
 
 
+def _runtime_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return default
+
+
 def _is_openai_reasoning_model(model_name: str) -> bool:
     """Return True for OpenAI o-series / GPT-5 reasoning models."""
     model_id = (model_name or "").lower().split("/")[-1]
@@ -81,7 +88,7 @@ def _make_api_request(end_point: str, headers: dict, payload: dict, api_name: st
             end_point,
             headers=headers,
             json=payload,
-            timeout=API_TIMEOUT_SECONDS,
+            timeout=_runtime_int("API_TIMEOUT_SECONDS", API_TIMEOUT_SECONDS),
         )
         return response, None
     except requests.exceptions.Timeout:
@@ -383,7 +390,7 @@ def _call_reasoning_api(config, model_name, messages, sampling_params, max_retri
 def call_vision_api(model_name: str, messages: list, sampling_params: dict, max_retries: int = None, tools: list = None):
     """Call the reasoning API with bounded retries."""
     if max_retries is None:
-        max_retries = API_MAX_RETRIES
+        max_retries = _runtime_int("API_MAX_RETRIES", API_MAX_RETRIES)
     max_retries = _max_retry_count(max_retries)
     config = _reasoning_api_config()
     return _call_reasoning_api(config, model_name, messages, sampling_params, max_retries, tools)

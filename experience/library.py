@@ -137,7 +137,7 @@ class _ExperienceMemoryProvider:
                 embedding_model=os.environ.get("EXPERIENCE_EMBEDDING_MODEL", "text-embedding-3-small"),
                 embedding_api_key=os.environ.get("EXPERIENCE_EMBEDDING_API_KEY"),
                 embedding_endpoint=os.environ.get("EXPERIENCE_EMBEDDING_ENDPOINT"),
-                enable_cache=False,
+                enable_cache=True,
             )
         return self._retriever
 
@@ -236,8 +236,8 @@ def _llm_merge_experiences(
 ) -> Optional[str]:
     if len(candidates) < 2:
         return None
-    settings = settings()
-    max_retries = settings.max_retries if max_retries is None else max_retries
+    library_settings = settings()
+    max_retries = library_settings.max_retries if max_retries is None else max_retries
 
     exp_list = [
         f"[{exp_id}] (similarity: {score:.3f})\n{format_experience_for_prompt(exp_id, record)}"
@@ -247,7 +247,14 @@ def _llm_merge_experiences(
 
     for attempt in range(max_retries):
         try:
-            response = _strip_markdown_code_blocks(llm.chat(prompt).strip())
+            response = _strip_markdown_code_blocks(
+                llm.chat(
+                    prompt,
+                    max_tokens=library_settings.merge_max_tokens,
+                    model_name=llm.critique_model_name,
+                    timeout=library_settings.merge_api_timeout,
+                ).strip()
+            )
             if response:
                 return response
             print("  - Warning: Empty merge response, retrying...")
@@ -268,8 +275,12 @@ def _process_add_with_merge(
     max_retries: Optional[int] = None,
     next_id: int = 0,
 ) -> Tuple[str, bool]:
-    settings = settings()
-    similarity_threshold = settings.merge_similarity_threshold if similarity_threshold is None else similarity_threshold
+    library_settings = settings()
+    similarity_threshold = (
+        library_settings.merge_similarity_threshold
+        if similarity_threshold is None
+        else similarity_threshold
+    )
     exp_id = f"E{next_id}"
     new_record = normalize_experience_record(exp_id, operation["experience"])
     new_text = new_record["content"]
@@ -287,7 +298,7 @@ def _process_add_with_merge(
     query_emb = new_emb[0] if len(new_emb.shape) == 2 else new_emb
     candidates = provider.search_similar(
         query_emb,
-        top_k=settings.similarity_search_top_k,
+        top_k=library_settings.similarity_search_top_k,
         similarity_threshold=similarity_threshold,
     )
     new_kind = new_record["kind"]
@@ -462,8 +473,12 @@ def batch_merge(
 ) -> ExperienceLibrary:
     """Merge generated operations into the canonical experience library."""
     existing = normalize_experience_library(existing)
-    settings = settings()
-    similarity_threshold = settings.merge_similarity_threshold if similarity_threshold is None else similarity_threshold
+    library_settings = settings()
+    similarity_threshold = (
+        library_settings.merge_similarity_threshold
+        if similarity_threshold is None
+        else similarity_threshold
+    )
     if not updates:
         return _reduce_existing_if_needed(
             existing,
@@ -553,7 +568,14 @@ def _merge_pair_for_reduction(
         return False
 
     try:
-        merged_text = _strip_markdown_code_blocks(llm.chat(_pair_merge_prompt(current, exp_id1, exp_id2)).strip())
+        merged_text = _strip_markdown_code_blocks(
+            llm.chat(
+                _pair_merge_prompt(current, exp_id1, exp_id2),
+                max_tokens=settings().merge_max_tokens,
+                model_name=llm.critique_model_name,
+                timeout=settings().merge_api_timeout,
+            ).strip()
+        )
         if not merged_text:
             print(f"      - Warning: Failed to generate merged text for {exp_id1} and {exp_id2}")
             return False
@@ -600,9 +622,13 @@ def _reduce_experiences_to_limit(
     retriever: Optional[ExperienceRetriever] = None,
 ) -> ExperienceLibrary:
     current = normalize_experience_library(experiences)
-    settings = settings()
-    max_rounds = settings.reduction_max_rounds if max_rounds is None else max_rounds
-    similarity_threshold = settings.reduction_similarity_threshold if similarity_threshold is None else similarity_threshold
+    library_settings = settings()
+    max_rounds = library_settings.reduction_max_rounds if max_rounds is None else max_rounds
+    similarity_threshold = (
+        library_settings.reduction_similarity_threshold
+        if similarity_threshold is None
+        else similarity_threshold
+    )
     round_idx = 0
     print(f"    - Starting reduction: {len(current)} experiences, target <= {limit}")
     provider = _ExperienceMemoryProvider(current, retriever=retriever)
@@ -686,11 +712,16 @@ def _chat_with_retries(
     label: str,
     max_tokens: Optional[int] = None,
 ):
-    settings = settings()
-    max_tokens = settings.refine_max_tokens if max_tokens is None else max_tokens
+    library_settings = settings()
+    max_tokens = library_settings.refine_max_tokens if max_tokens is None else max_tokens
     for attempt in range(max_retries):
         try:
-            return llm.chat(prompt, max_tokens=max_tokens)
+            return llm.chat(
+                prompt,
+                max_tokens=max_tokens,
+                model_name=llm.critique_model_name,
+                timeout=library_settings.refine_api_timeout,
+            )
         except Exception as exc:
             if attempt < max_retries - 1:
                 print(f"  [{label}] LLM call failed (attempt {attempt + 1}/{max_retries}): {exc}")
@@ -778,8 +809,8 @@ def refine_experience_library(
     experiences = normalize_experience_library(experiences)
     if not experiences or len(experiences) < 10:
         return experiences
-    settings = settings()
-    max_retries = settings.max_retries if max_retries is None else max_retries
+    library_settings = settings()
+    max_retries = library_settings.max_retries if max_retries is None else max_retries
 
     print(f"  [Refine] Starting library refinement: {len(experiences)} experiences")
     prompt = _refine_prompt(experiences)

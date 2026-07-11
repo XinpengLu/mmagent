@@ -423,7 +423,10 @@ def _schedule_initial_pipeline_work(
         state.next_sample_idx = len(pending_samples)
         return
 
-    max_concurrent_retrievals = args.num_workers
+    max_concurrent_retrievals = max(
+        1,
+        min(args.num_workers, int(getattr(args, "memory_retrieval_workers", 4))),
+    )
     while state.next_sample_idx < len(pending_samples) and state.active_retrieval_count < max_concurrent_retrievals:
         _schedule_next_retrieval(executor, state, pending_samples, experience_retriever, base_system_prompt)
 

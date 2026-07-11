@@ -118,8 +118,13 @@ def write_debug_texts(debug_dir: Optional[str], files: Mapping[str, object]) -> 
         return
     path = Path(debug_dir)
     path.mkdir(parents=True, exist_ok=True)
-    for filename, content in files.items():
-        (path / filename).write_text(str(content or ""), encoding="utf-8")
+    # Response files land first; the matching prompt is the commit marker used by caches.
+    ordered_files = sorted(files.items(), key=lambda item: item[0].endswith("_prompt.txt"))
+    for filename, content in ordered_files:
+        target = path / filename
+        tmp_path = target.with_suffix(target.suffix + ".tmp")
+        tmp_path.write_text(str(content or ""), encoding="utf-8")
+        tmp_path.replace(target)
 
 
 def load_experiences(path: str) -> ExperienceLibrary:
@@ -136,8 +141,12 @@ def load_experiences(path: str) -> ExperienceLibrary:
 def save_library(path: str, experiences: Dict[str, Any]) -> None:
     """Save the canonical v1 experience library JSON payload."""
     payload = _serialize_experience_library(experiences)
-    with open(path, "w", encoding="utf-8") as f:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = target.with_suffix(target.suffix + ".tmp")
+    with tmp_path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
+    tmp_path.replace(target)
 
 
 def format_for_prompt(experiences: Dict[str, Any], max_items: int = 32) -> str:
