@@ -9,12 +9,13 @@ candidates affect later stages.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Tuple
 
-from experience import ExperienceLLM, batch_merge, load_experiences, save_library
+from experience import ExperienceLLM, ExperienceRetriever, batch_merge, load_experiences, save_library
 from experience.experience_generation import recovery_experience
 from skill import cluster_experiences_to_skills
 
@@ -286,13 +287,25 @@ def _write_reflection_memory(
     operations: List[dict],
 ) -> None:
     exp_path = memory_root / "experiences.json"
+    existing = load_experiences(str(exp_path))
+    retriever = ExperienceRetriever(
+        experiences=existing,
+        embedding_model=os.environ.get("EXPERIENCE_EMBEDDING_MODEL", "text-embedding-3-small"),
+        embedding_api_key=os.environ.get("EXPERIENCE_EMBEDDING_API_KEY"),
+        embedding_endpoint=os.environ.get("EXPERIENCE_EMBEDDING_ENDPOINT"),
+        cache_dir=str(memory_root),
+        enable_cache=True,
+        experience_library_path=str(exp_path),
+    )
     merged = batch_merge(
-        load_experiences(str(exp_path)),
+        existing,
         operations,
         ExperienceLLM(),
         debug_dir=str(metrics_dir / "validation_reflection_merge"),
         experience_limit=int(runtime_setting("experience.max_items", 90)),
+        retriever=retriever,
     )
+    retriever.update_experiences(merged, incremental=True)
     memory_root.mkdir(parents=True, exist_ok=True)
     save_library(str(exp_path), merged)
 
@@ -300,6 +313,7 @@ def _write_reflection_memory(
         skill_cluster_min_experiences=int(runtime_setting("skill.cluster.min_experiences", 2)),
         skill_cluster_max_clusters=int(runtime_setting("skill.cluster.max_clusters", 12)),
         skill_max_length=1000,
+        experience_library=str(exp_path),
     )
     try:
         merged = cluster_experiences_to_skills(merged, str(skill_library), ExperienceLLM(), skill_args)

@@ -282,7 +282,7 @@ def _process_add_with_merge(
         else similarity_threshold
     )
     exp_id = f"E{next_id}"
-    new_record = normalize_experience_record(exp_id, operation["experience"])
+    new_record = normalize_experience_record(exp_id, _operation_experience(operation))
     new_text = new_record["content"]
     if not new_text:
         return exp_id, False
@@ -361,8 +361,20 @@ def _reduce_existing_if_needed(
         return existing
 
 
+def _operation_experience(operation: Dict[str, Any]) -> Dict[str, Any]:
+    nested = operation.get("experience")
+    if isinstance(nested, dict):
+        return nested
+    return {
+        key: value
+        for key, value in operation.items()
+        if key not in {"option", "modified_from", "experience"}
+    }
+
+
 def _operation_content(operation: Dict[str, Any]) -> str:
-    return operation["experience"]["content"].strip()
+    experience = _operation_experience(operation)
+    return str(experience.get("content") or "").strip()
 
 
 def _apply_batch_operations(
@@ -405,7 +417,11 @@ def _apply_batch_operations(
 def _apply_modifications(provider: _ExperienceMemoryProvider, operations: List[dict]) -> None:
     for operation in operations:
         modified_from = operation.get("modified_from")
-        new_record = normalize_experience_record(modified_from, operation["experience"]) if modified_from else None
+        new_record = (
+            normalize_experience_record(modified_from, _operation_experience(operation))
+            if modified_from
+            else None
+        )
         if modified_from and new_record and new_record["content"]:
             provider.modify_experience(modified_from, new_record)
             print(f"    - Modified {modified_from}")
