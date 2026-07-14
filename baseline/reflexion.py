@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,7 +10,13 @@ from typing import Any
 
 from engine.api_caller import call_vision_api
 from main_flow.metrics import compute_and_save_sample_summary
-from utils.artifacts import ROLLOUT_METRICS_FILENAME, TRAJECTORY_FILENAME, read_json, write_json
+from utils.artifacts import (
+    ROLLOUT_METRICS_FILENAME,
+    TRAJECTORY_FILENAME,
+    clean_rollout_artifacts,
+    read_json,
+    write_json,
+)
 from utils.transient import result_has_transient_failure
 
 
@@ -43,7 +50,14 @@ def _completed_rollout_result(sample_dir: Path, rollout_idx: int, rollouts_per_s
     metrics_path = rollout_dir / ROLLOUT_METRICS_FILENAME
     if not (traj_path.exists() and metrics_path.exists()):
         return None
-    metrics = read_json(metrics_path)
+    try:
+        metrics = read_json(metrics_path)
+    except (OSError, json.JSONDecodeError, ValueError):
+        clean_rollout_artifacts(rollout_dir)
+        return None
+    if not isinstance(metrics, dict):
+        clean_rollout_artifacts(rollout_dir)
+        return None
     if metrics.get("api_transient_failure") or metrics.get("tool_transient_failure"):
         return None
     return {

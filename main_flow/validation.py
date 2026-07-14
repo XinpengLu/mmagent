@@ -11,7 +11,7 @@ from typing import Any
 
 from .context import MainFlowContext, _count_json_items
 from .phase import run_phase
-from .validation_memory import apply_validation_feedback, calibrate_validation_status, select_best
+from .validation_memory import apply_validation_feedback, calibrate_validation_status, select_last
 from .validation_reflection import reflect_validation_failures
 from validation_tools.history import record_validation_stage
 from validation_tools.reporting import write_validation_report
@@ -328,7 +328,7 @@ def _finalize_validation_run(
             os.environ.get("VALIDATION_BEST_MEMORY_ROOT")
             or ctx.output_root / benchmark / "memory" / "best_validation_memory"
         )
-    select_best(
+    select_last(
         history_path=paths.history_path,
         snapshot_root=paths.snapshot_root,
         output_memory_root=output_memory_root,

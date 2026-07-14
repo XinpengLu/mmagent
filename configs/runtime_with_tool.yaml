@@ -26,7 +26,7 @@ baseline:
   enable_function_calling: true
 
 runtime:
-  num_workers: 4
+  num_workers: 12
 
 rollout:
   per_sample: 4
@@ -35,7 +35,7 @@ rollout:
 api:
   reasoning_key_file: configs/keys/huawei.keys
   reasoning_base_url: "http://115.120.87.159:8082/v1"
-  verifier_key_file: configs/keys/qwen_openai4.keys
+  verifier_key_file: configs/keys/qwen_openai3.keys
   verifier_base_url: "https://api.llm.ustc.edu.cn/v1"
   serpapi_key_file: configs/keys/serp.keys
   jina_key_file: configs/keys/jina.keys

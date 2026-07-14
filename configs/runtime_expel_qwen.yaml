@@ -1,7 +1,15 @@
 ﻿mode: train_test
 
 benchmarks:
+  - TIR-Bench
+  - VisualToolBench
+  - BrowseComp-V3
+  - MMSearch-Plus
+  - AgentVista
+  - MMBrowseComp
+  - VisBrowse-Bench
   - Agentic-MME
+
 
 paths:
   benchmark_processed: benchmark/processed
@@ -41,9 +49,9 @@ rollout:
 api:
   api_timeout_seconds: 180
   api_max_retries: 2
-  reasoning_key_file: configs/keys/qwen_openai3.keys
+  reasoning_key_file: configs/keys/qwen_openai.keys
   reasoning_base_url: "https://api.llm.ustc.edu.cn/v1"
-  verifier_key_file: configs/keys/qwen_openai3.keys
+  verifier_key_file: configs/keys/qwen_openai4.keys
   verifier_base_url: "https://api.llm.ustc.edu.cn/v1"
   serpapi_key_file: configs/keys/serp.keys
   jina_key_file: configs/keys/jina.keys

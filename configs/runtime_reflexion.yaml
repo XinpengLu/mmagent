@@ -1,12 +1,14 @@
 ﻿mode: test
 
 benchmarks:
-  # - TIR-Bench
-  # - VisualToolBench
-  # - MMSearch-Plus
-  # - BrowseComp-V3
-  # - AgentVista
+  - TIR-Bench
+  - VisualToolBench
+  - MMSearch-Plus
+  - BrowseComp-V3
+  - MMBrowseComp
+  - AgentVista
   - VisBrowse-Bench
+  - Agentic-MME
 
 paths:
   benchmark_processed: benchmark/processed
@@ -15,10 +17,8 @@ paths:
   tool_config: configs/tool_configs.yaml
 
 models:
-  # reasoning_model_name: deepseek-v4-flash-ascend
-  # verifier_model_name: deepseek-v4-flash-ascend
-  reasoning_model_name: deepseek-v4-flash
-  verifier_model_name: deepseek-v4-flash
+  reasoning_model_name: gpt-5.5
+  verifier_model_name: qwen3.6-chat
 
 baseline:
   name: reflexion
@@ -32,18 +32,17 @@ baseline:
   reflection_max_tokens: 512
 
 runtime:
-  num_workers: 2
+  num_workers: 12
 
 rollout:
   per_sample: 4
   max_tokens: 8192
 
 api:
-  # reasoning_key_file: configs/keys/qwen_openai.keys
-  reasoning_key_file: configs/keys/openai.keys
-  reasoning_base_url: "https://card.nassaapi.xyz/v1"
-  verifier_key_file: configs/keys/openai.keys
-  verifier_base_url: "https://card.nassaapi.xyz/v1"
+  reasoning_key_file: configs/keys/huawei.keys
+  reasoning_base_url: "http://115.120.87.159:8082/v1"
+  verifier_key_file: configs/keys/qwen_openai3.keys
+  verifier_base_url: "https://api.llm.ustc.edu.cn/v1"
   serpapi_key_file: configs/keys/serp.keys
   jina_key_file: configs/keys/jina.keys
   jina_proxy: "http://127.0.0.1:7890"

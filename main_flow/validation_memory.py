@@ -89,6 +89,50 @@ def select_best(
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
+def _stage_sort_key(row: Dict[str, Any]) -> tuple[int, str]:
+    value = row.get("stage_index", row.get("stage", 0))
+    try:
+        return int(value), str(row.get("stage", value))
+    except (TypeError, ValueError):
+        return 0, str(row.get("stage", value))
+
+
+def select_last(
+    *,
+    history_path: Path,
+    snapshot_root: Path,
+    output_memory_root: Path,
+    output_json: Path,
+    split: str = "val",
+) -> None:
+    rows = [row for row in read_history(history_path) if row.get("split") == split]
+    if not rows:
+        raise SystemExit(f"No rows for split={split}")
+    last = max(rows, key=_stage_sort_key)
+    stage = str(last.get("stage", last.get("stage_index")))
+    snapshot = snapshot_root / f"stage_{stage}"
+    if not snapshot.exists():
+        raise FileNotFoundError(f"Missing snapshot for last stage: {snapshot}")
+
+    out = output_memory_root
+    if out.exists():
+        shutil.rmtree(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    copy_tree_contents(snapshot, out)
+    _fix_skill_paths_in_memory(out)
+
+    result = {
+        "selected_stage": stage,
+        "selection_method": "last_stage",
+        "pass_at_k": last.get("pass_at_k"),
+        "average_at_k": last.get("average_at_k"),
+        "source_snapshot": str(snapshot),
+        "output_memory_root": str(out),
+    }
+    write_json(output_json, result, indent=2)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
 def _update_validation_stats(
     stats: Dict[str, Any],
     *,

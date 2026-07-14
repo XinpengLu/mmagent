@@ -1,15 +1,12 @@
 ﻿name: hive
-mode: train_val_test
+mode: train_val
 
 benchmarks:
-  - VisualToolBench
-  - TIR-Bench
+  # - VisualToolBench
   - MMSearch-Plus
-  - BrowseComp-V3
   - AgentVista
-  - MMBrowseComp
-  - VisBrowse-Bench
-  - Agentic-MME
+
+
 
 paths:
   benchmark_processed: benchmark/processed
@@ -19,15 +16,15 @@ paths:
 
 models:
   reasoning_model_name: qwen3.6-chat
-  verifier_model_name: qwen3.6-chat
-  experience_model_name: qwen3.6-reasoner
-  experience_image_model_name: qwen3.6-chat
-  experience_critique_model_name: qwen3.6-chat
+  verifier_model_name: qwen3.6-plus
+  experience_model_name: qwen3.6-plus
+  experience_image_model_name: qwen3.6-plus
+  experience_critique_model_name: qwen3.6-plus
   experience_embedding_model: text-embedding-3-small
 
 runtime:
   enable_function_calling: true
-  num_workers: 12
+  num_workers: 8
 
 rollout:
   per_sample: 4
@@ -56,7 +53,7 @@ experience:
 
   embedding:
     max_retries: 2
-    timeout: 30
+    timeout: 240
 
   library:
     max_retries: 1
@@ -128,12 +125,11 @@ ablation:
 api:
   reasoning_key_file: configs/keys/qwen_openai.keys
   reasoning_base_url: "https://api.llm.ustc.edu.cn/v1"
-  verifier_key_file: configs/keys/qwen_openai4.keys
-  verifier_base_url: "https://api.llm.ustc.edu.cn/v1"
-  experience_key_file: configs/keys/qwen_openai4.keys
-  experience_base_url: "https://api.llm.ustc.edu.cn/v1"
+  verifier_key_file: configs/keys/huawei.keys
+  verifier_base_url: "http://115.120.87.159:8082/v1"
+  experience_key_file: configs/keys/huawei.keys
+  experience_base_url: "http://115.120.87.159:8082/v1"
   experience_embedding_key_file: configs/keys/huawei.keys
-  experience_embedding_base_url: "http://115.120.87.159:8082/v1"
   serpapi_key_file: configs/keys/serp.keys
   jina_key_file: configs/keys/jina.keys
   jina_proxy: "http://127.0.0.1:7890"

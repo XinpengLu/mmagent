@@ -24,7 +24,7 @@ BENCHMARKS = [
     "VisBrowse-Bench",
     "Agentic-MME",
 ]
-DEFAULT_MODELS = ["gpt-5.5", "qwen3.6-chat", "deepseek-v4-flash"]
+DEFAULT_MODELS = ["gpt-5.5", "qwen3.6-chat", "deepseek-v4-flash-ascend"]
 DEFAULT_METHODS = ["no_tool", "with_tool", "reflexion", "expel", "trace2skill", "xskill", "hive"]
 METHOD_LABELS = {
     "no_tool": "CoT",

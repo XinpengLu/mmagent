@@ -18,11 +18,11 @@ paths:
   tool_config: configs/tool_configs.yaml
 
 models:
-  reasoning_model_name: deepseek-v4-flash-ascend
-  verifier_model_name: qwen3.6-chat
-  experience_model_name: qwen3.6-reasoner
-  experience_image_model_name: qwen3.6-chat
-  experience_critique_model_name: qwen3.6-chat
+  reasoning_model_name: deepseek-v4-flash
+  verifier_model_name: qwen3.6-plus
+  experience_model_name: qwen3.6-plus
+  experience_image_model_name: qwen3.6-plus
+  experience_critique_model_name: qwen3.6-plus
   experience_embedding_model: text-embedding-3-small
 
 runtime:
@@ -126,12 +126,12 @@ ablation:
     validation_reflection: true
 
 api:
-  reasoning_key_file: configs/keys/qwen_openai.keys
-  reasoning_base_url: "https://api.llm.ustc.edu.cn/v1"
-  verifier_key_file: configs/keys/qwen_openai2.keys
-  verifier_base_url: "https://api.llm.ustc.edu.cn/v1"
-  experience_key_file: configs/keys/qwen_openai4.keys
-  experience_base_url: "https://api.llm.ustc.edu.cn/v1"
+  reasoning_key_file: configs/keys/huawei.keys
+  reasoning_base_url: "http://115.120.87.159:8082/v1"
+  verifier_key_file: configs/keys/huawei.keys
+  verifier_base_url: "http://115.120.87.159:8082/v1"
+  experience_key_file: configs/keys/huawei.keys
+  experience_base_url: "http://115.120.87.159:8082/v1"
   experience_embedding_key_file: configs/keys/huawei.keys
   experience_embedding_base_url: "http://115.120.87.159:8082/v1"
   serpapi_key_file: configs/keys/serp.keys
