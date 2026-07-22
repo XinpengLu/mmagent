@@ -3,7 +3,14 @@ from __future__ import annotations
 import argparse
 
 from configs.runtime import load_runtime_config
-from .context import build_context, reuse_train_map, validate_reuse_train_order
+from .context import (
+    build_context,
+    full_hive_test_memory_map,
+    full_hive_test_memory_root,
+    full_hive_test_memory_run,
+    reuse_train_map,
+    validate_reuse_train_order,
+)
 from .phase import run_phase
 from .validation import run_train_with_validation
 
@@ -11,6 +18,8 @@ from .validation import run_train_with_validation
 def run_mode(runtime):
     ctx = build_context(runtime)
     reuse_map = reuse_train_map(runtime.settings)
+    full_memory_map = full_hive_test_memory_map(runtime.settings)
+    full_memory_run = full_hive_test_memory_run(runtime.settings)
 
     for benchmark in runtime.benchmarks:
         reuse_source = reuse_map.get(benchmark, "")
@@ -26,7 +35,17 @@ def run_mode(runtime):
 
         if runtime.mode in {"test", "train_test", "train_val_test"}:
             phase_env = None
-            if reuse_source:
+            full_memory_source = full_memory_map.get(benchmark, "")
+            if full_memory_source:
+                source_memory = full_hive_test_memory_root(ctx, full_memory_run, full_memory_source)
+                phase_env = {
+                    "MEMORY_ROOT_OVERRIDE": str(source_memory),
+                    "MEMORY_NAME_OVERRIDE": full_memory_source,
+                    "REUSE_TRAIN_BENCHMARK": f"{full_memory_run}/{full_memory_source}",
+                    "REQUIRE_NONEMPTY_MEMORY": "true",
+                }
+                print(f"[Reuse] Testing {benchmark} with full HIVE memory: {source_memory}")
+            elif reuse_source:
                 phase_env = {
                     "MEMORY_ROOT_OVERRIDE": str(ctx.memory_root_base / reuse_source / "memory"),
                     "MEMORY_NAME_OVERRIDE": reuse_source,

@@ -60,6 +60,23 @@ def reuse_train_map(settings: dict[str, Any]) -> dict[str, str]:
     return {str(target): str(source) for target, source in mapping.items() if source}
 
 
+def full_hive_test_memory_map(settings: dict[str, Any]) -> dict[str, str]:
+    mapping = settings.get("memory", {}).get("reuse_full_hive_memory_for_test", {}) or {}
+    if not isinstance(mapping, dict):
+        raise ValueError("memory.reuse_full_hive_memory_for_test must be a mapping.")
+    return {str(target): str(source or target) for target, source in mapping.items()}
+
+
+def full_hive_test_memory_run(settings: dict[str, Any]) -> str:
+    return str(settings.get("memory", {}).get("full_hive_memory_run", "hive") or "hive")
+
+
+def full_hive_test_memory_root(ctx: MainFlowContext, source_run: str, source_benchmark: str) -> Path:
+    run_path = Path(source_run)
+    source_root = run_path if run_path.is_absolute() else ctx.memory_root_base.parent / run_path
+    return source_root / source_benchmark / "memory"
+
+
 def validate_reuse_train_order(benchmarks: list[str], settings: dict[str, Any]) -> None:
     benchmark_order = {benchmark: idx for idx, benchmark in enumerate(benchmarks)}
     for target, source in reuse_train_map(settings).items():

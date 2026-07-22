@@ -190,6 +190,26 @@ def _ensure_reusable_memory(benchmark: str, memory: _MemoryPaths, phase_env: dic
             f"Error: {benchmark} is configured to reuse {reuse_source} memory, but no reusable memory exists at "
             f"{memory.memory_root}. Run {reuse_source} training before testing {benchmark}."
         )
+    if str(phase_env.get("REQUIRE_NONEMPTY_MEMORY", "")).lower() != "true":
+        return
+
+    experience_count = 0
+    skill_count = 0
+    if has_experiences:
+        raw = read_json(memory.experience_library)
+        experiences = raw.get("experiences", raw) if isinstance(raw, dict) else {}
+        experience_count = len(experiences) if isinstance(experiences, dict) else 0
+    skill_index_path = memory.memory_root / "skill_index.json"
+    if has_skills:
+        raw = read_json(skill_index_path)
+        skills = raw.get("skills", {}) if isinstance(raw, dict) else {}
+        skill_count = len(skills) if isinstance(skills, dict) else 0
+    if experience_count <= 0 and skill_count <= 0:
+        raise SystemExit(
+            f"Error: {benchmark} is configured to reuse full HIVE memory from {reuse_source}, "
+            f"but the memory at {memory.memory_root} is empty. Rebuild the full HIVE memory or point "
+            "memory.full_hive_memory_run to a non-empty run."
+        )
 
 
 def _resolve_phase_paths(
