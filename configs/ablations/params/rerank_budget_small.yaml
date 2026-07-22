@@ -1,10 +1,16 @@
 extends: ../../runtime.yaml
 
+mode: test
+
+benchmarks:
+  - TIR-Bench
+
 memory:
+  reuse_full_hive_memory_for_test:
+    TIR-Bench: TIR-Bench
   rerank_top_skills: 1
   rerank_top_experiences: 4
 
 ablation:
   kind: param
   name: rerank_budget_small
-

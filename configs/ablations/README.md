@@ -41,6 +41,22 @@ output/gpt-5.5/mmagent_ablation_module_no_skill/
 This keeps module ablations, parameter ablations, and the default run from
 overwriting each other.
 
+## Test-only TIR-Bench ablations
+
+Some ablations only change inference-time memory usage, so their configs run
+`mode: test` on `TIR-Bench` and reuse the final memory from the full HIVE run:
+
+```yaml
+memory:
+  reuse_full_hive_memory_for_test:
+    TIR-Bench: TIR-Bench
+```
+
+The source run defaults to `output/{reasoning_model_name}/hive/`. For example,
+`configs/ablations/modules/no_memory_rerank.yaml` writes its test outputs under
+`output/{reasoning_model_name}/hive_ablation_module_no_memory_rerank/`, but reads
+memory from `output/{reasoning_model_name}/hive/TIR-Bench/memory/`.
+
 ## Primary module ablations
 
 Keep the main `modules/` directory aligned with the paper-level claims:

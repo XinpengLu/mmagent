@@ -1,8 +1,16 @@
 extends: ../../runtime.yaml
 
+mode: test
+
+benchmarks:
+  - TIR-Bench
+
+memory:
+  reuse_full_hive_memory_for_test:
+    TIR-Bench: TIR-Bench
+
 ablation:
   kind: module
   name: no_linked_experience
   modules:
     linked_experience_injection: false
-

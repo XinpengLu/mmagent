@@ -1,5 +1,14 @@
 extends: ../../runtime.yaml
 
+mode: test
+
+benchmarks:
+  - TIR-Bench
+
+memory:
+  reuse_full_hive_memory_for_test:
+    TIR-Bench: TIR-Bench
+
 skill:
   retrieval:
     top_k: 1
@@ -7,4 +16,3 @@ skill:
 ablation:
   kind: param
   name: skill_retrieval_topk_1
-

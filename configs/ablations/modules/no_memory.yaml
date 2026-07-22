@@ -1,5 +1,10 @@
 extends: ../../runtime.yaml
 
+mode: test
+
+benchmarks:
+  - TIR-Bench
+
 ablation:
   kind: module
   name: no_memory
@@ -14,4 +19,3 @@ ablation:
     memory_rerank: false
     tool_plan: false
     failure_recovery: false
-
