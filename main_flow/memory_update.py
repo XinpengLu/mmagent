@@ -497,7 +497,8 @@ class TrainingMemoryUpdater:
         self.update_interval_samples = (
             experience_update_interval_samples(args) if self.enabled else 1
         )
-        _reconcile_skill_library_after_resume(args, memory_runtime)
+        if self.enabled:
+            _reconcile_skill_library_after_resume(args, memory_runtime)
 
     def extend(self, sample_infos):
         if not self.enabled or not sample_infos:
